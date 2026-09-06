@@ -13,3 +13,6 @@ pgdata/
 dist/
 *.db
 *.tsbuildinfo
+.coverage
+coverage.xml
+htmlcov/
