@@ -60,7 +60,11 @@ def scan_text(source: str) -> tuple[SecretHit, ...]:
                 hits.append(SecretHit(lineno, rule_id, message))
         for token_match in _TOKEN_RE.finditer(line):
             token = token_match.group(1)
-            if len(token) >= 20 and shannon_entropy(token) >= ENTROPY_THRESHOLD:
+            if len(token) < 20 or " " in token or "\\" in token:
+                # Spaces never occur in real tokens; backslashes mark regexes
+                # and Windows paths, the top source of entropy false positives.
+                continue
+            if shannon_entropy(token) >= ENTROPY_THRESHOLD:
                 # Skip tokens already caught by a pattern on this line.
                 if not any(h.line == lineno for h in hits):
                     hits.append(

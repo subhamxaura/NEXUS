@@ -8,6 +8,7 @@ import {
   cancelMission,
   missionDetail,
   missionEvents,
+  retryMission,
   type AgentTask,
   type MissionEvent,
   type ValidationRun
@@ -120,7 +121,7 @@ function ControlInner({ id }: { id: number }) {
         <>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <h1 className="text-xl font-semibold">Mission #{mission.id}</h1>
-            <span className="rounded-full border border-zinc-700 px-2.5 py-0.5 text-xs">{mission.status.replaceAll("_", " ")}</span>
+            <span aria-live="polite" className="rounded-full border border-zinc-700 px-2.5 py-0.5 text-xs">{mission.status.replaceAll("_", " ")}</span>
             {active && (
               <button
                 className="rounded-md border border-zinc-700 px-3 py-1 text-xs hover:bg-zinc-900"
@@ -143,6 +144,22 @@ function ControlInner({ id }: { id: number }) {
             <div className="mt-4 rounded-md border border-amber-900 bg-amber-950/30 px-4 py-3 text-sm text-amber-200" role="alert">
               Needs a human: {String(mission.result.reason ?? "see trace below")}.
               {mission.result.detail ? ` ${String(mission.result.detail).slice(0, 300)}` : ""} No PR was created.
+              <div>
+                <button
+                  disabled={approving}
+                  onClick={() => {
+                    setApproving(true);
+                    setError(null);
+                    retryMission(id)
+                      .then(() => void detail.refetch())
+                      .catch((e: Error) => setError(e.message))
+                      .finally(() => setApproving(false));
+                  }}
+                  className="mt-2 rounded-md border border-amber-700 px-3 py-1.5 text-xs text-amber-100 hover:bg-amber-900/40 disabled:opacity-40"
+                >
+                  {approving ? "Retrying…" : "Retry mission"}
+                </button>
+              </div>
             </div>
           )}
           {mission.status === "failed" && (

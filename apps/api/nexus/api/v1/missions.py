@@ -267,6 +267,20 @@ async def cancel_mission(
     return _mission_out(mission)
 
 
+@router.post("/missions/{mission_id}/retry", response_model=MissionOut)
+async def retry_mission(
+    mission_id: int,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MissionOut:
+    """Re-run a needs_human/failed/cancelled mission. Appends new tasks to the trace."""
+    mission = await _owned_mission(mission_id, user, session)
+    if mission.status not in ("needs_human", "failed", "cancelled"):
+        raise HTTPException(status_code=409, detail=f"cannot retry a {mission.status} mission")
+    mission = await mission_service.run_mission(session, mission.id)
+    return _mission_out(mission)
+
+
 @router.post("/missions/{mission_id}/approve", response_model=PullRequestOut)
 async def approve_mission(
     mission_id: int,

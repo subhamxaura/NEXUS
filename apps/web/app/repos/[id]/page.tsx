@@ -16,6 +16,7 @@ import {
   type Finding
 } from "@/lib/api";
 import { useRouter } from "next/navigation";
+import DepGraph from "@/components/DepGraph";
 
 type Tab = "overview" | "explorer" | "findings" | "graph" | "missions";
 
@@ -43,6 +44,19 @@ function FindingRow({ f }: { f: Finding }) {
       <p className="mt-1 font-mono text-xs text-zinc-500">
         {f.type} · {f.rule_id}
       </p>
+      {"why" in f.guidance && (
+        <details className="mt-2 text-sm">
+          <summary className="cursor-pointer text-xs text-zinc-400 hover:text-zinc-200">
+            Why it matters & how to fix
+          </summary>
+          <p className="mt-1 text-xs text-zinc-300">
+            <span className="text-zinc-500">Why: </span>{(f.guidance as { why: string }).why}
+          </p>
+          <p className="mt-1 text-xs text-zinc-300">
+            <span className="text-zinc-500">Fix: </span>{(f.guidance as { fix: string }).fix}
+          </p>
+        </details>
+      )}
     </li>
   );
 }
@@ -245,31 +259,44 @@ function RepoInner({ id }: { id: number }) {
             <section className="mt-6 rounded-xl border border-zinc-800 bg-zinc-950 p-6">
               {graph.isLoading ? (
                 <div className="h-40 animate-pulse" aria-label="Loading graph" />
-              ) : graph.data?.edges.length === 0 ? (
+              ) : !graph.data || graph.data.nodes.length === 0 ? (
+                <p className="text-sm text-zinc-400">No files analyzed.</p>
+              ) : graph.data.edges.length === 0 ? (
                 <p className="text-sm text-zinc-400">No intra-repository imports detected.</p>
               ) : (
                 <>
                   <p className="text-xs text-zinc-500">
-                    {graph.data?.nodes.length} files · {graph.data?.edges.length} import edges. Select a file to highlight its dependents.
+                    {graph.data.nodes.length} files · {graph.data.edges.length} import edges.
                   </p>
-                  <ul className="mt-4 space-y-1.5">
-                    {graph.data?.edges.map((e, i) => (
-                      <li key={i} className="font-mono text-xs">
-                        <button className="text-sky-300 hover:underline" onClick={() => setPreview(e.src)} title="Preview source">{e.src}</button>
-                        <span className="text-zinc-500"> → </span>
-                        <button className="text-zinc-200 hover:underline" onClick={() => setPreview(e.dst)} title="Preview target">{e.dst}</button>
-                      </li>
-                    ))}
-                  </ul>
-                  {preview !== null && graph.data && (
+                  <div className="mt-3">
+                    <DepGraph
+                      nodes={graph.data.nodes}
+                      edges={graph.data.edges}
+                      selected={preview}
+                      onSelect={(p) => setPreview(p)}
+                    />
+                  </div>
+                  {preview !== null && (
                     <div className="mt-4 rounded-md border border-zinc-800 p-3">
                       <p className="font-mono text-xs text-zinc-300">{preview}</p>
                       <p className="mt-1 text-xs text-zinc-500">
-                        Dependents ({dependentsOf(preview).length}): {dependentsOf(preview).join(", ") || "none"}
+                        Imported by ({dependentsOf(preview).length}): {dependentsOf(preview).join(", ") || "none"}
                       </p>
                       <button className="mt-2 text-xs text-zinc-500 hover:text-zinc-200" onClick={() => setPreview(null)}>Clear</button>
                     </div>
                   )}
+                  <details className="mt-4">
+                    <summary className="cursor-pointer font-mono text-xs text-zinc-400">
+                      All {graph.data.edges.length} edges (full paths)
+                    </summary>
+                    <ul className="mt-2 max-h-56 space-y-1 overflow-auto">
+                      {graph.data.edges.map((e, i) => (
+                        <li key={i} className="font-mono text-xs text-zinc-400">
+                          {e.src} <span className="text-zinc-600">→</span> {e.dst}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
                 </>
               )}
               {previewQ.data && tab === "graph" && preview !== null && (

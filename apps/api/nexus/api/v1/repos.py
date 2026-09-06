@@ -11,6 +11,7 @@ from nexus.api.v1.deps import get_current_user, get_owned_repo
 from nexus.core.database import get_session
 from nexus.core.security import verify_webhook_signature  # noqa: F401 (wired in Phase 3)
 from nexus.github import clone as gitclone
+from nexus.intelligence.findings import guidance_for
 from nexus.models.entities import Analysis, DependencyEdge, FileMetric, Finding, Repository, User
 from nexus.services import analysis as analysis_service
 
@@ -42,6 +43,7 @@ class FindingOut(BaseModel):
     rule_id: str
     evidence: dict[str, object]
     priority_score: float
+    guidance: dict[str, str] = {}
 
 
 class FileOut(BaseModel):
@@ -193,20 +195,24 @@ async def list_findings(
         .order_by(Finding.priority_score.desc(), Finding.id)
         .limit(500)
     )
-    return [
-        FindingOut(
-            id=f.id,
-            type=f.type,
-            severity=f.severity,
-            path=f.path,
-            line=f.line,
-            message=f.message,
-            rule_id=f.rule_id,
-            evidence=dict(f.evidence),
-            priority_score=f.priority_score,
+    out: list[FindingOut] = []
+    for f in result.scalars().all():
+        guidance = guidance_for(f.rule_id)
+        out.append(
+            FindingOut(
+                id=f.id,
+                type=f.type,
+                severity=f.severity,
+                path=f.path,
+                line=f.line,
+                message=f.message,
+                rule_id=f.rule_id,
+                evidence=dict(f.evidence),
+                priority_score=f.priority_score,
+                guidance={"why": guidance.why, "fix": guidance.fix} if guidance else {},
+            )
         )
-        for f in result.scalars().all()
-    ]
+    return out
 
 
 @router.get("/repos/{repo_id}/files", response_model=list[FileOut])

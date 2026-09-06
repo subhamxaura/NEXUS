@@ -68,3 +68,21 @@ def test_file_risk_bounded() -> None:
         "security",
         "untested",
     }
+
+
+def test_entropy_skips_regex_and_paths() -> None:
+    from nexus.intelligence.secrets_scanner import scan_text
+
+    assert scan_text(r'x = re.compile(r"(?i)(abc|def)[0-9]{16}")') == ()
+    assert scan_text('p = "C:\\Users\\someverylongdirectoryname\\file.txt"') == ()
+    assert scan_text('key = "AKIAIOSFODNN7EXAMPLE"') != ()
+
+
+def test_test_files_exempt_from_size_rules(tmp_path: Path) -> None:
+    big_test = tmp_path / "test_big.py"
+    big_test.write_text(
+        "import x\n" + "\n".join(f"def test_{i}(): assert True" for i in range(300))
+    )
+    res = run_pipeline(tmp_path)
+    assert res.file_count == 1
+    assert all(f.type not in ("high-complexity", "god-file") for f in res.findings)

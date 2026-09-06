@@ -226,10 +226,14 @@ def run_pipeline(repo_dir: Path) -> PipelineResult:
     raw: list[RawFinding] = []
     for rel in sorted(sources):
         loc, cc, _ = numbers[rel]
-        raw.extend(complexity_findings(rel, supported[rel], cc))
-        god = god_file_finding(rel, loc)
-        if god:
-            raw.append(god)
+        is_test = _is_test_path(rel)
+        if not is_test:
+            # Complexity/size rules target production code; tests are
+            # branchy by nature and would only add noise.
+            raw.extend(complexity_findings(rel, supported[rel], cc))
+            god = god_file_finding(rel, loc)
+            if god:
+                raw.append(god)
         for hit in insecure[rel]:
             sev = "high" if hit["rule_id"] in ("py-eval-exec", "py-pickle") else "medium"
             raw.append(
@@ -258,7 +262,7 @@ def run_pipeline(repo_dir: Path) -> PipelineResult:
                     0.85,
                 )
             )
-        if not _is_test_path(rel):
+        if not is_test:
             mt = missing_tests_finding(rel, risk_map[rel])
             if mt:
                 raw.append(mt)

@@ -1,6 +1,9 @@
 # NEXUS Progress
 
-## Status: Phase 3 — COMPLETE (local verification with fakes; Docker/GitHub/deploy need host + keys)
+## Status: Phase 4 — COMPLETE (all locally verifiable work done; deploy/demo-host steps remain with user)
+- Phase 4 additions: interactive SVG dependency graph (deterministic layered layout, zoom/pan/keyboard, risk coloring, dependent highlighting, full-path edge list fallback); per-rule finding guidance (`why`/`fix` in API + UI); mission **retry** endpoint (needs_human/failed/cancelled → running, trace appended); a11y (skip link, focus-visible rings, reduced-motion, aria-live status, labeled controls); generated `packages/shared-types/index.d.ts` (`scripts/gen_types.py`, 14 schemas); `docs/LIMITATIONS.md`; security self-review in `docs/SECURITY.md`; scanner precision tuning from dogfood (entropy skips regex/backslash/space tokens; size rules exempt test files) with regression tests.
+- Dogfood: pipeline on this repo (86 files) → health 20.5 with genuine hotspots (missions.py CC 74, pipeline.py 77) and zero real secrets; recorded as tech debt, not hidden.
+- Fixed in Phase 4: broken decorator newline in missions.py (caught by regen script, full suite re-run).
 - Phase 3 decisions: Docker sandbox (network-isolated test step; lockfile-only installs in a separate networked step; read-only root, 2g/2cpu, tmpfs, 10-min cap) with truthful `unavailable` when no daemon — never a fabricated pass; Tester is deterministic (no LLM); ≤2 Coder→Tester repairs; Reviewer rejection (or score <70) blocks approval; approval is the sole GitHub-mutation path, re-checking persisted validation+review; approval-time PAT (never stored/logged, scrubbed from errors); `nexus/<id>-<slug>` branches, conventional commits, no merges; push events mark analysis stale; WS deferred to Phase 4 (2–3 s polling on the append-only log).
 - Decisions carried forward: public-clone only, OpenAI primary (`llm_provider=openai`, `gpt-4o-mini`), Vercel + Railway.
 - Phase 2 decisions: deterministic Orchestrator DAG (LLM reserved for Scout/Architect/Security/Coder content); schema validation lives in BaseAgent (adapters return raw JSON) so re-prompt-on-validation-error actually fires; coder diff must pass `git apply --check` with one feedback-carrying repair attempt, else `needs_human`; security `risky` verdict blocks coder (blocked task, no patch); missing LLM key → `needs_human` with reason (never a fake); API runs missions inline, arq `run_mission_job` ready for Compose.
@@ -53,6 +56,14 @@
 - Alembic `upgrade head` → + `validation_runs, reviews, pull_requests` (14 tables)
 - `npm run lint` / `typecheck` / `build` → pass (validation/review/approval/PR sections in Mission Control)
 - NOT verified (needs host): real Docker validation, real GitHub PR, Compose/Postgres run, Vercel/Railway deploy → `docs/DEPLOY.md` + `docs/DEMO.md` provided
+
+### Phase 4
+- `pytest -q` → 62 passed (+retry ×2, entropy/test-exempt tunings; scanner still catches the AWS-example key)
+- `ruff check` / `format --check` / `mypy --strict` → clean
+- `npm run lint` / `typecheck` / `build` → pass (DepGraph, guidance, retry, validation/review/approval UI)
+- `scripts/gen_types.py` → 14 schemas, deterministic output
+- Dogfood scan: 86 files, health 20.5, 0 real secrets; hotspots honestly reported
+- NOT verifiable here: deployed production flow, demo screenshots/GIF (capture per DEMO.md on a live host)
 
 ## Risks / open
 - No GitHub creds → public repos only; OAuth exchange still stubbed (truthful 501).

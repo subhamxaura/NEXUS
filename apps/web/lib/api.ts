@@ -82,6 +82,7 @@ export interface Finding {
   rule_id: string;
   evidence: Record<string, unknown>;
   priority_score: number;
+  guidance: { why: string; fix: string } | Record<string, never>;
 }
 
 export interface FileMetric {
@@ -211,6 +212,7 @@ export const listMissions = (repoId: number) => api<Mission[]>(`/api/v1/repos/${
 export const missionDetail = (id: number) => api<MissionDetail>(`/api/v1/missions/${id}`);
 export const missionEvents = (id: number) => api<MissionEvent[]>(`/api/v1/missions/${id}/events`);
 export const cancelMission = (id: number) => api<Mission>(`/api/v1/missions/${id}/cancel`, { method: "POST" });
+export const retryMission = (id: number) => api<Mission>(`/api/v1/missions/${id}/retry`, { method: "POST" });
 export const approveMission = (id: number, githubToken?: string) =>
   api<PullRequest>(`/api/v1/missions/${id}/approve`, {
     method: "POST",

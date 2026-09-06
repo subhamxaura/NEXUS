@@ -31,6 +31,88 @@ PY_COMPLEX_HIGH = 20.0
 TS_COMPLEX_FLAG = 15.0
 
 
+@dataclass(frozen=True)
+class RuleGuidance:
+    why: str
+    fix: str
+
+
+RULE_GUIDANCE: dict[str, RuleGuidance] = {
+    "cc-python-high": RuleGuidance(
+        why="Very high branching makes the function hard to test and likely to hide bugs.",
+        fix="Extract helper functions for each branch group; add tests per branch.",
+    ),
+    "cc-python-medium": RuleGuidance(
+        why="Above-average branching raises the cost of review and testing.",
+        fix="Split the largest branch block into a named helper with its own test.",
+    ),
+    "cc-ts-heuristic": RuleGuidance(
+        why="Keyword heuristic suggests dense branching (tree-sitter unavailable).",
+        fix="Manually review the flagged file; split complex functions.",
+    ),
+    "god-file": RuleGuidance(
+        why="Oversized files slow navigation, review, and ownership.",
+        fix="Split by responsibility into focused modules behind a thin facade.",
+    ),
+    "missing-tests": RuleGuidance(
+        why="High-risk code without tests fails silently on the next change.",
+        fix="Add a test file covering the riskiest function first.",
+    ),
+    "py-eval-exec": RuleGuidance(
+        why="Executes arbitrary code from input data — a direct code-execution vector.",
+        fix="Replace with ast.literal_eval or an explicit allow-listed dispatch table.",
+    ),
+    "py-pickle": RuleGuidance(
+        why="Unpickling untrusted data can execute arbitrary code on load.",
+        fix="Use JSON or another safe serialization format; never unpickle untrusted bytes.",
+    ),
+    "py-yaml-load": RuleGuidance(
+        why="yaml.load with the default Loader can construct arbitrary objects.",
+        fix="Use yaml.safe_load.",
+    ),
+    "py-os-system": RuleGuidance(
+        why="Passes commands through a shell, inviting command injection.",
+        fix="Use subprocess.run with an argument list and shell=False.",
+    ),
+    "py-subprocess-shell": RuleGuidance(
+        why="shell=True with variable input allows shell injection.",
+        fix="Pass an argument list with shell=False; validate inputs.",
+    ),
+    "secret-aws-access-key": RuleGuidance(
+        why="A leaked access key grants account access until rotated.",
+        fix="Revoke the key immediately, purge it from history, use a secrets manager.",
+    ),
+    "secret-github-token": RuleGuidance(
+        why="A leaked token grants repository/API access until revoked.",
+        fix="Revoke the token, purge from history, use minimal scopes or OIDC.",
+    ),
+    "secret-private-key": RuleGuidance(
+        why="Private key material must never live in source control.",
+        fix="Remove it, rotate the keypair, store keys in a dedicated secret store.",
+    ),
+    "secret-generic-password": RuleGuidance(
+        why="Hardcoded passwords leak to every clone and log.",
+        fix="Move to environment variables or a secrets manager.",
+    ),
+    "secret-generic-secret-assign": RuleGuidance(
+        why="Hardcoded secrets leak to every clone and log.",
+        fix="Move to environment variables or a secrets manager; rotate the value.",
+    ),
+    "secret-high-entropy-string": RuleGuidance(
+        why="High-entropy strings often turn out to be keys or tokens.",
+        fix="Confirm what it is; if sensitive, rotate and move to a secrets manager.",
+    ),
+    "parse-error": RuleGuidance(
+        why="The file could not be parsed, so its metrics are missing.",
+        fix="Fix the syntax error or exclude generated files from analysis.",
+    ),
+}
+
+
+def guidance_for(rule_id: str) -> RuleGuidance | None:
+    return RULE_GUIDANCE.get(rule_id)
+
+
 def complexity_findings(path: str, language: str, complexity: float) -> list[RawFinding]:
     out: list[RawFinding] = []
     if language == "python":

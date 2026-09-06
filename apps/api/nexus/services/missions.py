@@ -58,9 +58,9 @@ MISSION_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "reviewing": ("awaiting_approval", "needs_human", "failed", "cancelled"),
     "awaiting_approval": ("pr_created", "needs_human", "failed", "cancelled"),
     "pr_created": (),
-    "needs_human": (),
-    "failed": (),
-    "cancelled": (),
+    "needs_human": ("running", "cancelled"),
+    "failed": ("running", "cancelled"),
+    "cancelled": ("running",),
 }
 
 TASK_RUN_ORDER = ("orchestrator", "scout", "architect", "security", "coder", "tester", "reviewer")
@@ -316,6 +316,7 @@ async def run_mission(
     analysis = await _latest_analysis(session, repo)
 
     transition(mission, "running")
+    mission.result = {}
     await log_event(session, mission.id, "mission_started", {})
     await session.commit()
 

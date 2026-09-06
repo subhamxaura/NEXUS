@@ -1,5 +1,15 @@
 # NEXUS Security Model
 
+## Self-review (2026-09-06, Phase 4)
+Dogfooded the NEXUS scanner on this repository (86 files): **zero real
+secrets** — no AWS keys, GitHub tokens, private keys, or hardcoded passwords.
+Two expected scanner hits are test fixtures by design (`AKIAIOSFODNN7EXAMPLE`
+assertion, `test-token-abc` approval fake). No `.env` is tracked; token-shaped
+test values use non-secret-looking strings.
+Also verified: authz isolation tests, approve-gate tests (wrong state, double
+approve, foreign user), token scrubbing in git errors, webhook HMAC tests,
+secret-redaction unit tests. See `docs/PROGRESS.md` verification logs.
+
 ## Principles
 Least privilege · explicit approval · isolation · redaction · auditability.
 

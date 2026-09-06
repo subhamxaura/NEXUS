@@ -438,3 +438,47 @@ def test_reviewer_rejection_blocks_pr(client: TestClient, monkeypatch: pytest.Mo
         f"/api/v1/missions/{mission_id}/approve", json={"github_token": "x"}, headers=auth
     )
     assert appr.status_code == 409
+
+
+@pytest.mark.usefixtures("_fresh_db", "cloned")
+def test_retry_appends_trace(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    risky = dict(SECURITY_OUT, verdict="risky", concerns=["x"], worsens_security=True)
+    monkeypatch.setattr(
+        factory,
+        "get_client",
+        lambda: FakeLLMClient(
+            {
+                "scout": [SCOUT_OUT, SCOUT_OUT],
+                "architect": [ARCHITECT_OUT, ARCHITECT_OUT],
+                "security": [risky, risky],
+            }
+        ),
+    )
+    auth = _login(client, "alice")
+    repo_id, finding_id = _setup_repo(client, auth)
+    mission_id = client.post(
+        f"/api/v1/repos/{repo_id}/missions",
+        json={"goal": "Fix it.", "finding_id": finding_id},
+        headers=auth,
+    ).json()["id"]
+    before = client.get(f"/api/v1/missions/{mission_id}", headers=auth).json()
+    assert before["mission"]["status"] == "needs_human"
+
+    r = client.post(f"/api/v1/missions/{mission_id}/retry", headers=auth)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "needs_human"
+    after = client.get(f"/api/v1/missions/{mission_id}", headers=auth).json()
+    assert len(after["tasks"]) == 2 * len(before["tasks"])  # trace preserved + appended
+
+
+@pytest.mark.usefixtures("_fresh_db", "cloned", "fake_llm", "sandbox_passed")
+def test_retry_rejects_active_mission(client: TestClient) -> None:
+    auth = _login(client, "alice")
+    repo_id, finding_id = _setup_repo(client, auth)
+    mission_id = client.post(
+        f"/api/v1/repos/{repo_id}/missions",
+        json={"goal": "Fix it.", "finding_id": finding_id},
+        headers=auth,
+    ).json()["id"]
+    r = client.post(f"/api/v1/missions/{mission_id}/retry", headers=auth)
+    assert r.status_code == 409  # awaiting_approval is not retryable
