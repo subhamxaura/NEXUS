@@ -1,3 +1,10 @@
-from nexus.models.entities import Repository, User
+from nexus.models.entities import (
+    Analysis,
+    DependencyEdge,
+    FileMetric,
+    Finding,
+    Repository,
+    User,
+)
 
-__all__ = ["Repository", "User"]
+__all__ = ["Analysis", "DependencyEdge", "FileMetric", "Finding", "Repository", "User"]
