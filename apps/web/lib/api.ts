@@ -166,10 +166,40 @@ export interface Patch {
   applied_state: string;
 }
 
+export interface ValidationRun {
+  id: number;
+  command: string;
+  exit_code: number | null;
+  status: string;
+  log_tail: string;
+  test_counts: Record<string, number>;
+  duration_s: number;
+  sandbox_id: string;
+}
+
+export interface Review {
+  verdict: string;
+  score: number;
+  comments: string[];
+  concerns: string[];
+  diff_hash: string;
+}
+
+export interface PullRequest {
+  pr_number: number;
+  url: string;
+  branch: string;
+  base: string;
+  state: string;
+}
+
 export interface MissionDetail {
   mission: Mission;
   tasks: AgentTask[];
   patch: Patch | null;
+  validation_runs: ValidationRun[];
+  review: Review | null;
+  pull_request: PullRequest | null;
 }
 
 export const startMission = (repoId: number, goal: string, findingId?: number) =>
@@ -181,3 +211,8 @@ export const listMissions = (repoId: number) => api<Mission[]>(`/api/v1/repos/${
 export const missionDetail = (id: number) => api<MissionDetail>(`/api/v1/missions/${id}`);
 export const missionEvents = (id: number) => api<MissionEvent[]>(`/api/v1/missions/${id}/events`);
 export const cancelMission = (id: number) => api<Mission>(`/api/v1/missions/${id}/cancel`, { method: "POST" });
+export const approveMission = (id: number, githubToken?: string) =>
+  api<PullRequest>(`/api/v1/missions/${id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ github_token: githubToken ?? "" })
+  });

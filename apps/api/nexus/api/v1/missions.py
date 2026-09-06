@@ -7,8 +7,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus.api.v1.deps import get_current_user, get_owned_repo
 from nexus.core.database import get_session
-from nexus.models.entities import AgentEvent, Mission, Patch, Repository, Task, User
+from nexus.models.entities import (
+    AgentEvent,
+    Mission,
+    Patch,
+    PullRequest,
+    Repository,
+    Review,
+    Task,
+    User,
+    ValidationRun,
+)
 from nexus.services import missions as mission_service
+from nexus.services import pr as pr_service
 
 router = APIRouter(tags=["missions"])
 
@@ -57,6 +68,18 @@ class PatchOut(BaseModel):
     files_changed: list[str]
     rationale: str
     applied_state: str
+
+
+class ApproveIn(BaseModel):
+    github_token: str = Field(default="", max_length=255)
+
+
+class PullRequestOut(BaseModel):
+    pr_number: int
+    url: str
+    branch: str
+    base: str
+    state: str
 
 
 def _mission_out(mission: Mission) -> MissionOut:
@@ -143,6 +166,42 @@ async def mission_detail(
     )
     patch = await session.execute(select(Patch).where(Patch.mission_id == mission.id))
     patch_row = patch.scalars().first()
+    validations: list[dict[str, object]] = []
+    review_out: dict[str, object] | None = None
+    if patch_row:
+        runs = await session.execute(
+            select(ValidationRun)
+            .where(ValidationRun.patch_id == patch_row.id)
+            .order_by(ValidationRun.id)
+        )
+        validations = [
+            {
+                "id": r.id,
+                "command": r.command,
+                "exit_code": r.exit_code,
+                "status": r.status,
+                "log_tail": r.log_tail,
+                "test_counts": dict(r.test_counts),
+                "duration_s": r.duration_s,
+                "sandbox_id": r.sandbox_id,
+            }
+            for r in runs.scalars().all()
+        ]
+        review = await session.execute(select(Review).where(Review.patch_id == patch_row.id))
+        review_row = review.scalars().first()
+        if review_row:
+            review_out = {
+                "verdict": review_row.verdict,
+                "score": review_row.score,
+                "comments": list(review_row.comments),
+                "concerns": list(review_row.concerns),
+                "diff_hash": review_row.diff_hash,
+            }
+    pr_row = (
+        (await session.execute(select(PullRequest).where(PullRequest.mission_id == mission.id)))
+        .scalars()
+        .first()
+    )
     return {
         "mission": _mission_out(mission).model_dump(),
         "tasks": [_task_out(t).model_dump() for t in tasks.scalars().all()],
@@ -154,6 +213,17 @@ async def mission_detail(
             applied_state=patch_row.applied_state,
         ).model_dump()
         if patch_row
+        else None,
+        "validation_runs": validations,
+        "review": review_out,
+        "pull_request": PullRequestOut(
+            pr_number=pr_row.pr_number,
+            url=pr_row.url,
+            branch=pr_row.branch,
+            base=pr_row.base,
+            state=pr_row.state,
+        ).model_dump()
+        if pr_row
         else None,
     }
 
@@ -195,3 +265,20 @@ async def cancel_mission(
     except mission_service.MissionError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     return _mission_out(mission)
+
+
+@router.post("/missions/{mission_id}/approve", response_model=PullRequestOut)
+async def approve_mission(
+    mission_id: int,
+    body: ApproveIn,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> PullRequestOut:
+    mission = await _owned_mission(mission_id, user, session)
+    try:
+        pr = await pr_service.approve_mission(session, mission.id, body.github_token or None)
+    except mission_service.MissionError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return PullRequestOut(
+        pr_number=pr.pr_number, url=pr.url, branch=pr.branch, base=pr.base, state=pr.state
+    )

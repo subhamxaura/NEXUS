@@ -6,9 +6,12 @@ from nexus.models.entities import (
     Finding,
     Mission,
     Patch,
+    PullRequest,
     Repository,
+    Review,
     Task,
     User,
+    ValidationRun,
 )
 
 __all__ = [
@@ -19,7 +22,10 @@ __all__ = [
     "Finding",
     "Mission",
     "Patch",
+    "PullRequest",
     "Repository",
+    "Review",
     "Task",
     "User",
+    "ValidationRun",
 ]

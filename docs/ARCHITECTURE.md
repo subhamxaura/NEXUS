@@ -32,9 +32,9 @@ Postgres 15+ (persistent) · Redis 7 (queue/cache/pubsub/locks)
 ```
 
 ## 3. Request flows
-- **Analyze:** `POST /repos/{id}/analyze` → arq job → shallow clone (`--depth 50`, isolated workspace) → intelligence pipeline → persist `Analysis`+children → WS progress events → cache key `(repo_id, sha, analyzer_version)`.
-- **Mission:** `POST /repos/{id}/missions` → Orchestrator builds DAG → Scout→Architect→(approval of proposal)→Coder→Tester(sandbox)→Reviewer → `needs_human` or `awaiting_approval` → `POST /missions/{id}/approve` (human only) → branch/commit/PR.
-- **Events:** workers/services emit `started|progress|completed|failed|retrying|blocked` → persisted `AgentEvent` → Redis pub/sub → WS.
+- **Analyze:** `POST /repos/{id}/analyze` → shallow clone (`--depth 50`, isolated workspace) → intelligence pipeline → persist `Analysis`+children → cache key `(repo_id, sha, analyzer_version)` (same-SHA rerun returns the cached row).
+- **Mission:** `POST /repos/{id}/missions` → deterministic DAG (Scout→Architect→Security→Coder→Tester→Reviewer) → `needs_human` or `awaiting_approval` → `POST /missions/{id}/approve` (human only, GitHub token) → branch/commit/PR.
+- **Events:** services emit `started|progress|completed|failed|retrying|blocked` → persisted append-only `AgentEvent` rows, polled by the UI every 2–3 s. Redis pub/sub + WebSocket streaming is deferred to Phase 4; the persisted log is already the replayable source of truth.
 
 ## 4. Data model (Alembic-managed)
 User, Repository, Analysis (uniq repo+sha), FileMetric, DependencyEdge, Finding,

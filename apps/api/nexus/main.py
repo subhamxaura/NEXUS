@@ -4,11 +4,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from nexus.api.v1 import v1
+from nexus.api.webhooks import router as webhook_router
 from nexus.core.logging import configure_logging
 
 log = configure_logging()
 app = FastAPI(title="NEXUS API", version="0.1.0")
 app.include_router(v1)
+app.include_router(webhook_router)
 
 
 @app.exception_handler(Exception)

@@ -149,3 +149,41 @@ class Patch(Base):
     rationale: Mapped[str] = mapped_column(String(4096), default="")
     applied_state: Mapped[str] = mapped_column(String(32), default="proposed")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ValidationRun(Base):
+    __tablename__ = "validation_runs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patch_id: Mapped[int] = mapped_column(ForeignKey("patches.id"), index=True)
+    sandbox_id: Mapped[str] = mapped_column(String(128), default="")
+    command: Mapped[str] = mapped_column(String(1024))
+    exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="passed")
+    log_tail: Mapped[str] = mapped_column(String(20000), default="")
+    test_counts: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    duration_s: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Review(Base):
+    __tablename__ = "reviews"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patch_id: Mapped[int] = mapped_column(ForeignKey("patches.id"), unique=True, index=True)
+    verdict: Mapped[str] = mapped_column(String(32))
+    score: Mapped[int] = mapped_column(Integer, default=0)
+    comments: Mapped[list[str]] = mapped_column(JSON, default=list)
+    concerns: Mapped[list[str]] = mapped_column(JSON, default=list)
+    diff_hash: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PullRequest(Base):
+    __tablename__ = "pull_requests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mission_id: Mapped[int] = mapped_column(ForeignKey("missions.id"), unique=True, index=True)
+    pr_number: Mapped[int] = mapped_column(Integer, default=0)
+    url: Mapped[str] = mapped_column(String(1024), default="")
+    branch: Mapped[str] = mapped_column(String(255), default="")
+    base: Mapped[str] = mapped_column(String(255), default="main")
+    state: Mapped[str] = mapped_column(String(32), default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

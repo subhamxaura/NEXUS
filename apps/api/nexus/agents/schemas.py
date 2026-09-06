@@ -88,3 +88,41 @@ class PatchOutput(BaseModel):
     files_changed: list[str] = Field(min_length=1, max_length=5)
     rationale: str
     test_notes: str = ""
+
+
+class TesterInput(BaseModel):
+    diff: str = Field(min_length=10)
+    files_changed: list[str] = Field(default_factory=list)
+    test_hint: str = ""
+
+
+class CommandOutcome(BaseModel):
+    command: str
+    exit_code: int | None = None
+    status: str = Field(pattern=r"^(passed|failed|error|skipped)$")
+    log_tail: str = ""
+    duration_s: float = 0.0
+    test_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class ValidationReport(BaseModel):
+    status: str = Field(pattern=r"^(passed|failed|unavailable|error)$")
+    sandbox_id: str = ""
+    image: str = ""
+    commands: list[CommandOutcome] = Field(default_factory=list)
+    test_counts: dict[str, int] = Field(default_factory=dict)
+    summary: str = ""
+
+
+class ReviewerInput(BaseModel):
+    diff: str = Field(min_length=10)
+    validation: ValidationReport
+    file_contents: dict[str, str] = Field(default_factory=dict)
+    proposal_summary: str = ""
+
+
+class ReviewVerdict(BaseModel):
+    verdict: str = Field(pattern=r"^(approve|request_changes)$")
+    score: int = Field(ge=0, le=100)
+    comments: list[str] = Field(default_factory=list)
+    concerns: list[str] = Field(default_factory=list)

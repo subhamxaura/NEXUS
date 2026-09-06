@@ -1,10 +1,13 @@
-"""Mission orchestration: deterministic DAG, state machine, events, diff gate.
+"""Mission orchestration: deterministic DAG, state machine, events, gates.
 
-Phase 2 DAG: orchestrator → scout → architect → security → coder.
-Coder output must pass `git apply --check` (read-only) or the mission ends
-as `needs_human`. No GitHub mutation happens in this phase.
+Phase 3 DAG: orchestrator → scout → architect → security → coder
+→ tester (sandbox) → reviewer → awaiting_approval → (human) → pr_created.
+Coder output must pass `git apply --check`; the Coder→Tester repair loop is
+capped at two repairs; Reviewer rejection blocks the PR path. GitHub mutation
+happens ONLY in services/pr.py via the human-approval endpoint.
 """
 
+import hashlib
 import subprocess
 import tempfile
 import time
@@ -23,8 +26,11 @@ from nexus.agents.schemas import (
     FileSummary,
     FindingSummary,
     MissionPlan,
+    ReviewerInput,
     ScoutInput,
     SecurityInput,
+    TesterInput,
+    ValidationReport,
 )
 from nexus.core.config import settings
 from nexus.github import clone as gitclone
@@ -37,23 +43,31 @@ from nexus.models.entities import (
     Mission,
     Patch,
     Repository,
+    Review,
     Task,
     User,
+    ValidationRun,
 )
+from nexus.sandbox.runner import DockerRunner, SandboxRunner
 from nexus.services import analysis as analysis_service
 
 MISSION_TRANSITIONS: dict[str, tuple[str, ...]] = {
     "created": ("running", "cancelled"),
-    "running": ("patch_ready", "needs_human", "failed", "cancelled"),
-    "patch_ready": (),
+    "running": ("validating", "needs_human", "failed", "cancelled"),
+    "validating": ("reviewing", "needs_human", "failed", "cancelled"),
+    "reviewing": ("awaiting_approval", "needs_human", "failed", "cancelled"),
+    "awaiting_approval": ("pr_created", "needs_human", "failed", "cancelled"),
+    "pr_created": (),
     "needs_human": (),
     "failed": (),
     "cancelled": (),
 }
 
-TASK_RUN_ORDER = ("orchestrator", "scout", "architect", "security", "coder")
+TASK_RUN_ORDER = ("orchestrator", "scout", "architect", "security", "coder", "tester", "reviewer")
 MAX_FILE_CONTENT_CHARS = 12000
 MAX_CONTEXT_FILES = 6
+MAX_VALIDATION_REPAIRS = 2
+REVIEW_MIN_SCORE = 70
 
 
 class MissionError(RuntimeError):
@@ -291,6 +305,7 @@ async def run_mission(
     session: AsyncSession,
     mission_id: int,
     llm: LLMClient | None = None,
+    sandbox: SandboxRunner | None = None,
 ) -> Mission:
     mission = await session.get(Mission, mission_id)
     if mission is None:
@@ -337,6 +352,7 @@ async def run_mission(
         emit=_emit,
         max_tokens=settings.llm_max_tokens,
         timeout_s=settings.llm_timeout_s,
+        sandbox_runner=sandbox or _default_sandbox(),
     )
     try:
         return await _execute_dag(session, mission, analysis, ctx)
@@ -499,11 +515,195 @@ async def _execute_dag(
         "proposal": architect_out.model_dump(),
         "security": security_out.model_dump(),
     }
-    transition(mission, "patch_ready")
-    await log_event(session, mission.id, "mission_completed", {"patch_id": patch.id})
+    transition(mission, "validating")
+    await session.commit()
+
+    validation = await _validate_with_repairs(
+        session, mission, ctx, patch, patch_out, architect_out, security_out, coder_files
+    )
+    if validation is None:
+        await session.refresh(mission)
+        return mission  # needs_human already recorded
+
+    patch.applied_state = "validated"
+    transition(mission, "reviewing")
+    await session.commit()
+
+    review_out, _ = await _run_task(
+        session,
+        mission,
+        ctx,
+        AGENTS["reviewer"],
+        ReviewerInput(
+            diff=patch.diff,
+            validation=validation,
+            file_contents=_read_context(ctx, patch.files_changed),
+            proposal_summary=architect_out.summary,
+        ),
+        ["coder", "tester"],
+    )
+    from nexus.agents.schemas import ReviewVerdict as VerdictType
+
+    if not isinstance(review_out, VerdictType):
+        raise MissionError("reviewer returned invalid verdict")
+    diff_hash = hashlib.sha256(patch.diff.encode()).hexdigest()
+    session.add(
+        Review(
+            patch_id=patch.id,
+            verdict=review_out.verdict,
+            score=review_out.score,
+            comments=review_out.comments,
+            concerns=review_out.concerns,
+            diff_hash=diff_hash,
+        )
+    )
+    await session.flush()
+    result = dict(mission.result)
+    result["validation"] = validation.model_dump()
+    result["review"] = {**review_out.model_dump(), "diff_hash": diff_hash}
+    mission.result = result
+
+    if review_out.verdict != "approve" or review_out.score < REVIEW_MIN_SCORE:
+        mission.result = {
+            **result,
+            "reason": "review_rejected",
+            "detail": "; ".join(review_out.concerns[:3]) or "reviewer requested changes",
+        }
+        transition(mission, "needs_human")
+        await log_event(session, mission.id, "blocked", {"reason": "review_rejected"})
+        await session.commit()
+        await session.refresh(mission)
+        return mission
+
+    patch.applied_state = "reviewed"
+    transition(mission, "awaiting_approval")
+    await log_event(
+        session, mission.id, "mission_completed", {"patch_id": patch.id, "awaiting_approval": True}
+    )
     await session.commit()
     await session.refresh(mission)
     return mission
+
+
+async def _validate_with_repairs(
+    session: AsyncSession,
+    mission: Mission,
+    ctx: AgentContext,
+    patch: Patch,
+    patch_out: Any,
+    architect_out: Any,
+    security_out: Any,
+    coder_files: dict[str, str],
+) -> ValidationReport | None:
+    """Run tester; on failure repair via coder up to MAX_VALIDATION_REPAIRS times.
+
+    Returns the passing report, or None after recording needs_human.
+    """
+    from nexus.agents.schemas import PatchOutput as PatchType
+
+    current_diff = patch_out.diff
+    for attempt in range(MAX_VALIDATION_REPAIRS + 1):
+        validation_out, _ = await _run_task(
+            session,
+            mission,
+            ctx,
+            AGENTS["tester"],
+            TesterInput(diff=current_diff, files_changed=patch.files_changed),
+            ["coder"],
+        )
+        if not isinstance(validation_out, ValidationReport):
+            raise MissionError("tester returned invalid report")
+        await _persist_validation_runs(session, patch.id, validation_out)
+
+        if validation_out.status == "passed":
+            return validation_out
+        if validation_out.status == "unavailable":
+            mission.result = {
+                **dict(mission.result),
+                "reason": "sandbox_unavailable",
+                "detail": validation_out.summary[:1000],
+            }
+            transition(mission, "needs_human")
+            await log_event(session, mission.id, "blocked", {"reason": "sandbox_unavailable"})
+            await session.commit()
+            return None
+        if attempt >= MAX_VALIDATION_REPAIRS:
+            break
+        await log_event(
+            session,
+            mission.id,
+            "retrying",
+            {
+                "agent": "coder",
+                "repair_attempt": attempt + 1,
+                "validation": validation_out.summary[:500],
+            },
+        )
+        repair_out, _ = await _run_task(
+            session,
+            mission,
+            ctx,
+            AGENTS["coder"],
+            CoderInput(
+                proposal=architect_out,
+                security_report=security_out,
+                file_contents=coder_files,
+                feedback="Sandbox validation failed:\n"
+                f"{validation_out.summary}\n"
+                + "\n".join(
+                    f"$ {c['command']} (exit {c['exit_code']}):\n{c['log_tail'][-1500:]}"
+                    for c in [cmd.model_dump() for cmd in validation_out.commands]
+                )
+                + "\nEmit a corrected unified diff.",
+            ),
+            ["architect", "security"],
+        )
+        if not isinstance(repair_out, PatchType):
+            raise MissionError("coder returned invalid patch")
+        ok, message, files_changed = check_diff(repair_out.diff, ctx.workspace)
+        if not ok:
+            mission.result = {
+                **dict(mission.result),
+                "reason": "diff_rejected",
+                "detail": message[:1000],
+            }
+            transition(mission, "needs_human")
+            await log_event(session, mission.id, "blocked", {"reason": "diff_rejected"})
+            await session.commit()
+            return None
+        current_diff = repair_out.diff
+        patch.diff = current_diff
+        patch.files_changed = files_changed or repair_out.files_changed
+        await session.flush()
+
+    mission.result = {
+        **dict(mission.result),
+        "reason": "validation_failed",
+        "detail": f"tests red after {MAX_VALIDATION_REPAIRS} repair(s)",
+    }
+    transition(mission, "needs_human")
+    await log_event(session, mission.id, "blocked", {"reason": "validation_failed"})
+    await session.commit()
+    return None
+
+
+async def _persist_validation_runs(
+    session: AsyncSession, patch_id: int, report: ValidationReport
+) -> None:
+    for cmd in report.commands:
+        session.add(
+            ValidationRun(
+                patch_id=patch_id,
+                sandbox_id=report.sandbox_id,
+                command=cmd.command,
+                exit_code=cmd.exit_code,
+                status=cmd.status,
+                log_tail=cmd.log_tail[-8000:],
+                test_counts=dict(cmd.test_counts),
+                duration_s=cmd.duration_s,
+            )
+        )
+    await session.flush()
 
 
 async def cancel_mission(session: AsyncSession, mission: Mission) -> Mission:
@@ -512,3 +712,8 @@ async def cancel_mission(session: AsyncSession, mission: Mission) -> Mission:
     await session.commit()
     await session.refresh(mission)
     return mission
+
+
+def _default_sandbox() -> SandboxRunner:
+    """Production default is real Docker; tests substitute a fake runner."""
+    return DockerRunner()

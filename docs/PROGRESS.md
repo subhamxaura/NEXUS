@@ -1,6 +1,7 @@
 # NEXUS Progress
 
-## Status: Phase 2 — COMPLETE (local verification with scripted LLM; live-model + Compose gates need key/Docker host)
+## Status: Phase 3 — COMPLETE (local verification with fakes; Docker/GitHub/deploy need host + keys)
+- Phase 3 decisions: Docker sandbox (network-isolated test step; lockfile-only installs in a separate networked step; read-only root, 2g/2cpu, tmpfs, 10-min cap) with truthful `unavailable` when no daemon — never a fabricated pass; Tester is deterministic (no LLM); ≤2 Coder→Tester repairs; Reviewer rejection (or score <70) blocks approval; approval is the sole GitHub-mutation path, re-checking persisted validation+review; approval-time PAT (never stored/logged, scrubbed from errors); `nexus/<id>-<slug>` branches, conventional commits, no merges; push events mark analysis stale; WS deferred to Phase 4 (2–3 s polling on the append-only log).
 - Decisions carried forward: public-clone only, OpenAI primary (`llm_provider=openai`, `gpt-4o-mini`), Vercel + Railway.
 - Phase 2 decisions: deterministic Orchestrator DAG (LLM reserved for Scout/Architect/Security/Coder content); schema validation lives in BaseAgent (adapters return raw JSON) so re-prompt-on-validation-error actually fires; coder diff must pass `git apply --check` with one feedback-carrying repair attempt, else `needs_human`; security `risky` verdict blocks coder (blocked task, no patch); missing LLM key → `needs_human` with reason (never a fake); API runs missions inline, arq `run_mission_job` ready for Compose.
 - Windows CRLF pitfall found: text-mode temp files translate `\n`→`\r\n`, corrupting patches — `check_diff` normalizes and writes with `newline=""`. Same normalization must be used anywhere a patch touches disk (Phase 3 sandbox).
@@ -20,6 +21,7 @@
 - (Phase 0) GitHub OAuth foundation: `GET /auth/github/login` builds authorize URL; callback validates shape, 501 until exchange — never fakes tokens.
 - (Phase 1) Intelligence vertical slice: connect repo → shallow clone → deterministic pipeline → persisted analysis → dashboard + repo view (health breakdown, explorer+preview, prioritized findings, edge list + dependents). Cache key (repo, sha, analyzer_version); same-SHA rerun returns cached row.
 - (Phase 2) Mission vertical slice: goal/finding → deterministic DAG (orchestrator→scout→architect→security→coder) → `git apply --check`-valid unified diff → Mission Control (plan, task timeline with I/O, live event stream, diff viewer, patch rationale) + missions tab with history. All agent I/O Pydantic-validated; tasks persist status/input/output/usage/duration/attempts/model/prompt-version; append-only event log; versioned prompts under `agents/prompts/`.
+- (Phase 3) Sandbox→review→approval→PR slice: Tester (deterministic sandbox facts) → ≤2-repair loop → independent Reviewer (diff-hash-bound verdict) → explicit human approval → branch/commit/PR with audit-trail body → Mission Control shows validation runs, review, approval panel, PR link. Webhook marks stale analysis. Deploy (`docs/DEPLOY.md`) + demo (`docs/DEMO.md`) guides.
 
 ## Verification log (2026-09-06, local)
 ### Phase 0
@@ -44,6 +46,13 @@
 - Alembic `upgrade head` → + `missions, tasks, agent_events, patches`
 - `npm run lint` / `typecheck` / `build` → pass (`/missions/[id]` dynamic route added)
 - NOT verified: live OpenAI/Anthropic calls (no key on this box; adapters compile under mypy, retry policy unit-covered only via fake) → needs `OPENAI_API_KEY` + Docker host
+
+### Phase 3
+- `pytest -q` → 60 passed (sandbox detection/parsing/LF-safety/unavailable, tester/reviewer agents, repair recover/exhaustion/unavailable, review-reject blocks approval, approve gates incl. mocked-GitHub happy path with branch/commit/body assertions, token scrubbing, webhook verify + stale-marking, no-PR-without-approval)
+- `ruff check` / `format --check` / `mypy --strict` → clean (54 files)
+- Alembic `upgrade head` → + `validation_runs, reviews, pull_requests` (14 tables)
+- `npm run lint` / `typecheck` / `build` → pass (validation/review/approval/PR sections in Mission Control)
+- NOT verified (needs host): real Docker validation, real GitHub PR, Compose/Postgres run, Vercel/Railway deploy → `docs/DEPLOY.md` + `docs/DEMO.md` provided
 
 ## Risks / open
 - No GitHub creds → public repos only; OAuth exchange still stubbed (truthful 501).

@@ -13,9 +13,11 @@ from nexus.agents.schemas import (
     ChangeProposal,
     CoderInput,
     RepoMap,
+    ReviewerInput,
     ScoutInput,
     SecurityInput,
     SecurityReport,
+    TesterInput,
 )
 from nexus.llm.client import LLMResult, TokenUsage, TransientLLMError
 from nexus.llm.fake import FakeLLMClient
@@ -156,13 +158,22 @@ async def test_orchestrator_deterministic_no_llm() -> None:
         ctx, OrchestratorInput(goal="fix it", finding_id=7)
     )
     assert attempts == 1 and usage.prompt_tokens == 0 and fake.calls == []
-    assert [s.agent for s in out.steps] == ["scout", "architect", "security", "coder"]  # type: ignore[attr-defined]
+    assert [s.agent for s in out.steps] == [  # type: ignore[attr-defined]
+        "scout",
+        "architect",
+        "security",
+        "coder",
+        "tester",
+        "reviewer",
+    ]
     deps = {s.agent: s.depends_on for s in out.steps}  # type: ignore[attr-defined]
     assert deps == {
         "scout": [],
         "architect": ["scout"],
         "security": ["architect"],
         "coder": ["architect", "security"],
+        "tester": ["coder"],
+        "reviewer": ["coder", "tester"],
     }
     assert events[0][0] == "completed"
 
@@ -173,3 +184,81 @@ async def test_prompts_versioned_and_present() -> None:
             path = Path("nexus/agents/prompts") / agent.prompt_file
             assert path.exists(), f"missing prompt {agent.prompt_file}"
             assert agent.prompt_version in agent.prompt_file
+    assert set(AGENTS) == {
+        "orchestrator",
+        "scout",
+        "architect",
+        "security",
+        "coder",
+        "tester",
+        "reviewer",
+    }
+
+
+async def test_tester_reports_sandbox_facts_deterministically() -> None:
+    from nexus.sandbox.runner import CommandResult, FakeRunner, SandboxResult
+
+    passed = SandboxResult(
+        status="passed",
+        sandbox_id="fake-1",
+        image="python",
+        commands=(
+            CommandResult(
+                command="python -m pytest -q",
+                exit_code=0,
+                status="passed",
+                log_tail="1 passed",
+                duration_s=1.2,
+                test_counts={"passed": 1},
+            ),
+        ),
+        summary="all passed",
+    )
+    ctx, _ = make_ctx(FakeLLMClient({}))
+    ctx.sandbox_runner = FakeRunner(passed)
+    out, usage, attempts = await AGENTS["tester"].run(
+        ctx, TesterInput(diff=CODER_OUT["diff"], files_changed=["helpers.py"])
+    )  # type: ignore[arg-type]
+    assert attempts == 1 and usage.prompt_tokens == 0  # no LLM involved
+    assert out.status == "passed"  # type: ignore[attr-defined]
+    assert out.test_counts == {"passed": 1}  # type: ignore[attr-defined]
+
+
+async def test_tester_surfaces_unavailable_honestly() -> None:
+    from nexus.sandbox.runner import FakeRunner, SandboxResult
+
+    unavailable = SandboxResult(
+        status="unavailable", sandbox_id="unavailable", image="", commands=(), summary="no docker"
+    )
+    ctx, _ = make_ctx(FakeLLMClient({}))
+    ctx.sandbox_runner = FakeRunner(unavailable)
+    out, _, _ = await AGENTS["tester"].run(ctx, TesterInput(diff=CODER_OUT["diff"]))  # type: ignore[arg-type]
+    assert out.status == "unavailable"  # type: ignore[attr-defined]
+
+
+async def test_reviewer_judges_independently() -> None:
+    from nexus.agents.schemas import ValidationReport
+
+    fake = FakeLLMClient(
+        {
+            "reviewer": [
+                {
+                    "verdict": "request_changes",
+                    "score": 40,
+                    "comments": ["validation unavailable"],
+                    "concerns": ["no test evidence"],
+                }
+            ]
+        }
+    )
+    ctx, _ = make_ctx(fake)
+    out, _, _ = await AGENTS["reviewer"].run(
+        ctx,
+        ReviewerInput(
+            diff=CODER_OUT["diff"],  # type: ignore[arg-type]
+            validation=ValidationReport(status="unavailable", summary="no docker"),
+            file_contents={},
+            proposal_summary="one-liner",
+        ),
+    )
+    assert out.verdict == "request_changes"  # type: ignore[attr-defined]

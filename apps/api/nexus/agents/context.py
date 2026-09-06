@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from nexus.llm.client import LLMClient
+from nexus.sandbox.runner import SandboxRunner
 
 EventEmitter = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -20,6 +21,7 @@ class AgentContext:
     max_tokens: int = 4000
     timeout_s: int = 120
     extra: dict[str, Any] = field(default_factory=dict)
+    sandbox_runner: SandboxRunner | None = None
 
     def read_file(self, rel_path: str, limit_chars: int = 12000) -> str:
         """Read a repo-relative file, truncated with an explicit marker."""

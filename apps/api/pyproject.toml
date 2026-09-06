@@ -9,7 +9,9 @@ select = ["E", "F", "I", "B", "UP", "S", "DTZ"]
 ignore = ["B008"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S307", "S301", "S602"]
+# Tests use obviously-fake credential-shaped values; real secrets are banned
+# from the repo by CONTRIBUTING.md and scanned in CI-adjacent checks.
+"tests/**" = ["S101", "S105", "S307", "S301", "S602"]
 "alembic/**" = ["S101"]
 
 [tool.mypy]
