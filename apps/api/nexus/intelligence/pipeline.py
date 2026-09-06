@@ -88,6 +88,7 @@ def _is_test_path(path: str) -> bool:
         or stem.endswith(".test.js")
         or stem.endswith(".spec.ts")
         or stem.endswith(".spec.js")
+        or lowered.startswith(("tests/", "test/"))
         or "/tests/" in lowered
         or "/test/" in lowered
         or "/__tests__/" in lowered

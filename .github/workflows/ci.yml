@@ -21,7 +21,12 @@ jobs:
         run: mypy nexus
       - name: Tests
         working-directory: apps/api
-        run: pytest -q
+        run: pytest -q --cov --cov-report=term --cov-fail-under=80
+      - name: Shared types drift
+        working-directory: apps/api
+        run: |
+          PYTHONPATH=. python scripts/gen_types.py
+          git diff --exit-code -- ../../packages/shared-types/index.d.ts
   frontend:
     runs-on: ubuntu-latest
     steps:

@@ -86,3 +86,11 @@ def test_test_files_exempt_from_size_rules(tmp_path: Path) -> None:
     res = run_pipeline(tmp_path)
     assert res.file_count == 1
     assert all(f.type not in ("high-complexity", "god-file") for f in res.findings)
+
+
+def test_nested_test_dirs_detected(tmp_path: Path) -> None:
+    from nexus.intelligence.pipeline import _is_test_path
+
+    assert _is_test_path("tests/testserver/server.py")
+    assert _is_test_path("test/helpers.py")
+    assert not _is_test_path("src/contest.py")

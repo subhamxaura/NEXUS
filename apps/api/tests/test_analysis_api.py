@@ -143,3 +143,23 @@ def test_invalid_repo_names_rejected(client: TestClient) -> None:
         client.post("/api/v1/repos", json={"owner": "../x", "name": "r"}, headers=auth).status_code
         == 400
     )
+
+
+@pytest.mark.usefixtures("_fresh_db", "cloned")
+def test_analysis_pipeline_failure_is_truthful(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import nexus.services.analysis as analysis_svc
+
+    def _boom(workspace: Path) -> object:
+        raise RuntimeError("parser exploded")
+
+    monkeypatch.setattr(analysis_svc, "run_pipeline", _boom)
+    auth = {"Authorization": _login(client, "alice")}
+    repo_id = client.post("/api/v1/repos", json={"owner": "o", "name": "r"}, headers=auth).json()[
+        "id"
+    ]
+    r = client.post(f"/api/v1/repos/{repo_id}/analyze", headers=auth)
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "failed"
+    assert "parser exploded" in str(r.json()["metrics"].get("error", ""))

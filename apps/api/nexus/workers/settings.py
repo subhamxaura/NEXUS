@@ -8,7 +8,7 @@ from sqlalchemy import select
 from nexus.core.config import settings
 from nexus.core.database import SessionLocal
 from nexus.github import clone as gitclone
-from nexus.models.entities import Analysis, Repository
+from nexus.models.entities import Analysis, Mission, Repository
 from nexus.services import analysis as analysis_service
 
 
@@ -44,6 +44,8 @@ async def run_mission_job(ctx: dict[str, Any], mission_id: int) -> dict[str, Any
     from nexus.services import missions as mission_service
 
     async with SessionLocal() as session:
+        if await session.get(Mission, mission_id) is None:
+            return {"status": "missing", "mission_id": mission_id}
         mission = await mission_service.run_mission(session, mission_id)
         return {"status": mission.status, "mission_id": mission.id}
 

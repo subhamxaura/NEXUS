@@ -88,6 +88,7 @@ def test_fake_runner_passthrough() -> None:
         status="passed", sandbox_id="s", image="python", commands=(), summary="ok"
     )
     fake = FakeRunner(expected)
+    assert fake.available() is True
     assert fake.validate("d", Path("."), []) == expected
     assert fake.calls and fake.calls[0]["diff_len"] == 1
 

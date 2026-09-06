@@ -7,6 +7,24 @@ NEXUS is an AI-assisted software engineering command center. Golden path:
 GitHub repo → analyze → findings → mission → plan → patch → sandbox → review → approval → PR
 ```
 
+```mermaid
+flowchart LR
+    GH[GitHub repo] --> CLONE[shallow clone]
+    CLONE --> INTEL[intelligence\nast/radon/graph/scores]
+    INTEL --> CACHE{cache hit?}
+    CACHE -- yes --> DASH[dashboard]
+    CACHE -- no --> PERSIST[(Postgres)]
+    PERSIST --> DASH
+    DASH --> MISSION[mission +\nfinding/goal]
+    MISSION --> DAG[scout → architect →\nsecurity → coder]
+    DAG --> DIFF[git apply --check]
+    DIFF --> SB[(Docker sandbox)]
+    SB --> REV[independent review]
+    REV --> WAIT{human approval}
+    WAIT -- approve + token --> PR[pull request]
+    WAIT -- reject/fail --> HUMAN[needs_human\nfull trace]
+```
+
 Deterministic systems own analysis, scoring, scheduling, caching, guardrails.
 LLMs own bounded reasoning: planning, patch generation, explanation, review, repair guidance.
 Every AI output is Pydantic-validated; every consequential action is observable, replayable, gated.

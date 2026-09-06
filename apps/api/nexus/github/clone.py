@@ -61,12 +61,15 @@ def clone(url: str, timeout_s: int = 180) -> CloneResult:
 
 
 def head_sha(workdir: Path) -> str:
-    proc = subprocess.run(  # noqa: S603, S607 -- fixed git binary, no shell
-        ["git", "-C", str(workdir), "rev-parse", "HEAD"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    try:
+        proc = subprocess.run(  # noqa: S603, S607 -- fixed git binary, no shell
+            ["git", "-C", str(workdir), "rev-parse", "HEAD"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        raise CloneError(f"could not resolve HEAD sha: {e}") from e
     if proc.returncode != 0:
         raise CloneError("could not resolve HEAD sha")
     return proc.stdout.strip()

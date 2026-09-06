@@ -22,3 +22,13 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# TesterInput is a Pydantic schema, not a test class.
+filterwarnings = ["ignore:.*test class 'TesterInput'.*:pytest.PytestCollectionWarning"]
+
+[tool.coverage.run]
+concurrency = ["greenlet", "thread"]
+source = ["nexus"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
