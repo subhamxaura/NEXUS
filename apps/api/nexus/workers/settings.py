@@ -38,11 +38,21 @@ async def analyze_repo_job(ctx: dict[str, Any], analysis_id: int) -> dict[str, A
         }
 
 
+async def run_mission_job(ctx: dict[str, Any], mission_id: int) -> dict[str, Any]:
+    """Worker-side mission execution (used in Compose; API runs inline in Phase 2)."""
+    _ = ctx
+    from nexus.services import missions as mission_service
+
+    async with SessionLocal() as session:
+        mission = await mission_service.run_mission(session, mission_id)
+        return {"status": mission.status, "mission_id": mission.id}
+
+
 async def _noop(ctx: dict[str, Any]) -> dict[str, str]:
     _ = ctx
     return {"status": "ok"}
 
 
 class WorkerSettings:
-    functions = [analyze_repo_job, _noop]
+    functions = [analyze_repo_job, run_mission_job, _noop]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)

@@ -8,13 +8,16 @@ import {
   latestAnalysis,
   listFiles,
   listFindings,
+  listMissions,
   readFile,
   repoGraph,
+  startMission,
   type FileMetric,
   type Finding
 } from "@/lib/api";
+import { useRouter } from "next/navigation";
 
-type Tab = "overview" | "explorer" | "findings" | "graph";
+type Tab = "overview" | "explorer" | "findings" | "graph" | "missions";
 
 const SEV_COLOR: Record<string, string> = {
   critical: "text-red-300 border-red-900",
@@ -114,7 +117,7 @@ function RepoInner({ id }: { id: number }) {
       ) : (
         <>
           <nav className="mt-6 flex gap-1 border-b border-zinc-800" aria-label="Repository sections">
-            {(["overview", "explorer", "findings", "graph"] as Tab[]).map((t) => (
+            {(["overview", "explorer", "findings", "graph", "missions"] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -274,9 +277,110 @@ function RepoInner({ id }: { id: number }) {
               )}
             </section>
           )}
+
+          {tab === "missions" && (
+            <MissionsTab
+              repoId={id}
+              findings={findings.data ?? []}
+              ready={analysis.isSuccess}
+            />
+          )}
         </>
       )}
     </main>
+  );
+}
+
+function MissionsTab({ repoId, findings, ready }: { repoId: number; findings: Finding[]; ready: boolean }) {
+  const router = useRouter();
+  const [goal, setGoal] = useState("");
+  const [findingId, setFindingId] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const missions = useQuery({ queryKey: ["missions", repoId], queryFn: () => listMissions(repoId), retry: false });
+
+  const start = async () => {
+    if (!goal.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const m = await startMission(repoId, goal.trim(), findingId ? Number(findingId) : undefined);
+      router.push(`/missions/${m.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Mission failed to start");
+      setBusy(false);
+    }
+  };
+
+  if (!ready) return <p className="mt-6 text-sm text-zinc-400">Analyze the repository first.</p>;
+  return (
+    <section className="mt-6 grid gap-4 lg:grid-cols-2">
+      <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-6">
+        <h2 className="text-sm font-medium">Start a mission</h2>
+        <label className="mt-4 block text-xs text-zinc-400" htmlFor="mission-goal">
+          Goal
+        </label>
+        <textarea
+          id="mission-goal"
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          placeholder="Fix the highest-risk issue."
+          rows={3}
+          className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-zinc-600"
+        />
+        <label className="mt-3 block text-xs text-zinc-400" htmlFor="mission-finding">
+          Finding (optional)
+        </label>
+        <select
+          id="mission-finding"
+          value={findingId}
+          onChange={(e) => setFindingId(e.target.value)}
+          className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm"
+        >
+          <option value="">None — general goal</option>
+          {findings.slice(0, 50).map((f) => (
+            <option key={f.id} value={f.id}>
+              #{f.id} [{f.severity}] {f.rule_id} — {f.path}
+            </option>
+          ))}
+        </select>
+        {error && <p role="alert" className="mt-3 text-sm text-red-300">{error}</p>}
+        <button
+          onClick={start}
+          disabled={busy || !goal.trim()}
+          className="mt-4 rounded-md bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-white disabled:opacity-40"
+        >
+          {busy ? "Running agents… (this takes a while)" : "Start mission"}
+        </button>
+        <p className="mt-2 text-xs text-zinc-500">
+          Runs Scout → Architect → Security → Coder with a real model. Produces a reviewable diff only — no pushes.
+        </p>
+      </div>
+      <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-6">
+        <h2 className="text-sm font-medium">Mission history</h2>
+        {missions.isLoading ? (
+          <div className="mt-3 h-24 animate-pulse" aria-label="Loading missions" />
+        ) : missions.data?.length === 0 ? (
+          <p className="mt-3 text-sm text-zinc-500">No missions yet.</p>
+        ) : (
+          <ul className="mt-3 space-y-2">
+            {missions.data?.map((m) => (
+              <li key={m.id} className="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 px-3 py-2">
+                <div className="min-w-0">
+                  <Link href={`/missions/${m.id}`} className="block truncate text-sm hover:underline">
+                    #{m.id} — {m.goal}
+                  </Link>
+                  <span className="font-mono text-xs text-zinc-500">{m.status}</span>
+                </div>
+                <Link href={`/missions/${m.id}`} className="shrink-0 text-xs text-zinc-300 hover:underline">
+                  Open
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
 

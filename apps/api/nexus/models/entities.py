@@ -88,3 +88,64 @@ class Finding(Base):
     rule_id: Mapped[str] = mapped_column(String(128))
     evidence: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     priority_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class Mission(Base):
+    __tablename__ = "missions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    repo_id: Mapped[int] = mapped_column(ForeignKey("repositories.id"), index=True)
+    analysis_id: Mapped[int | None] = mapped_column(ForeignKey("analyses.id"), nullable=True)
+    finding_id: Mapped[int | None] = mapped_column(ForeignKey("findings.id"), nullable=True)
+    goal: Mapped[str] = mapped_column(String(2048))
+    status: Mapped[str] = mapped_column(String(32), default="created", index=True)
+    creator_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    plan: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Task(Base):
+    __tablename__ = "tasks"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mission_id: Mapped[int] = mapped_column(ForeignKey("missions.id"), index=True)
+    agent_name: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    dependencies: Mapped[list[str]] = mapped_column(JSON, default=list)
+    input: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    output: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    token_usage: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    model: Mapped[str] = mapped_column(String(128), default="")
+    prompt_version: Mapped[str] = mapped_column(String(32), default="")
+    error: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AgentEvent(Base):
+    """Append-only event log. No update/delete path exists by design."""
+
+    __tablename__ = "agent_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mission_id: Mapped[int] = mapped_column(ForeignKey("missions.id"), index=True)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(32), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Patch(Base):
+    __tablename__ = "patches"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mission_id: Mapped[int] = mapped_column(ForeignKey("missions.id"), unique=True, index=True)
+    diff: Mapped[str] = mapped_column(String(100000))
+    files_changed: Mapped[list[str]] = mapped_column(JSON, default=list)
+    rationale: Mapped[str] = mapped_column(String(4096), default="")
+    applied_state: Mapped[str] = mapped_column(String(32), default="proposed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

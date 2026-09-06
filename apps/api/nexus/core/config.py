@@ -18,7 +18,12 @@ class Settings(BaseSettings):
     github_client_id: str = ""
     github_client_secret: str = ""
     github_webhook_secret: str = ""
-    llm_provider: str = "anthropic"
+    llm_provider: str = "openai"
+    llm_default_model: str = "gpt-4o-mini"
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    llm_max_tokens: int = 4000
+    llm_timeout_s: int = 120
 
     @field_validator("jwt_secret")
     @classmethod

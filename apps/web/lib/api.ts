@@ -119,3 +119,65 @@ export const listFiles = (id: number) => api<FileMetric[]>(`/api/v1/repos/${id}/
 export const repoGraph = (id: number) => api<Graph>(`/api/v1/repos/${id}/graph`);
 export const readFile = (id: number, path: string) =>
   api<{ path: string; content: string }>(`/api/v1/repos/${id}/files/${path}`);
+
+export interface PlanStep {
+  agent: string;
+  depends_on: string[];
+}
+
+export interface Mission {
+  id: number;
+  repo_id: number;
+  goal: string;
+  finding_id: number | null;
+  status: string;
+  plan: { goal: string; finding_id: number | null; steps: PlanStep[] };
+  result: Record<string, unknown>;
+}
+
+export interface AgentTask {
+  id: number;
+  agent_name: string;
+  status: string;
+  dependencies: string[];
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  token_usage: { model: string; prompt_tokens: number; completion_tokens: number };
+  duration_ms: number;
+  attempt_count: number;
+  model: string;
+  prompt_version: string;
+  error: string | null;
+}
+
+export interface MissionEvent {
+  id: number;
+  task_id: number | null;
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface Patch {
+  id: number;
+  diff: string;
+  files_changed: string[];
+  rationale: string;
+  applied_state: string;
+}
+
+export interface MissionDetail {
+  mission: Mission;
+  tasks: AgentTask[];
+  patch: Patch | null;
+}
+
+export const startMission = (repoId: number, goal: string, findingId?: number) =>
+  api<Mission>(`/api/v1/repos/${repoId}/missions`, {
+    method: "POST",
+    body: JSON.stringify({ goal, finding_id: findingId ?? null })
+  });
+export const listMissions = (repoId: number) => api<Mission[]>(`/api/v1/repos/${repoId}/missions`);
+export const missionDetail = (id: number) => api<MissionDetail>(`/api/v1/missions/${id}`);
+export const missionEvents = (id: number) => api<MissionEvent[]>(`/api/v1/missions/${id}/events`);
+export const cancelMission = (id: number) => api<Mission>(`/api/v1/missions/${id}/cancel`, { method: "POST" });
