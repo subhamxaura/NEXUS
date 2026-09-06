@@ -1,8 +1,12 @@
 __pycache__/
 *.pyc
 .venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 node_modules/
 .next/
+out/
 .env
 !.env.example
 pgdata/
