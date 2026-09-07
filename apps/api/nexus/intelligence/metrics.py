@@ -4,6 +4,9 @@
   complexity 0 and `parse_error` recorded — never fabricated.
 - TS/JS: documented keyword heuristic (tree-sitter deferred). The
   `complexity_source` field always says which method produced the number.
+- C/C++: documented token heuristic over comment/string-masked code
+  (complexity = functions + branch keywords; MI is a simple documented
+  proxy, not radon-grade).
 """
 
 import re
@@ -64,4 +67,24 @@ def ts_numbers(source: str) -> FileNumbers:
         complexity=complexity,
         maintainability=None,
         complexity_source="heuristic-ts-v1",
+    )
+
+
+def c_numbers(source: str, function_count: int) -> FileNumbers:
+    """Heuristic C/C++ numbers. `function_count` comes from parse_c()."""
+    from nexus.intelligence.c_parser import c_branch_count
+
+    branches = c_branch_count(source)
+    complexity = round(max(1.0, float(function_count + branches)), 2)
+    avg_cc = complexity / max(function_count, 1)
+    loc = loc_of(source)
+    # Simple documented proxy (NOT radon MI): penalize dense branching and size.
+    maintainability: float | None = round(
+        max(0.0, min(100.0, 100.0 - 4.0 * avg_cc - loc / 80.0)), 1
+    )
+    return FileNumbers(
+        loc=loc,
+        complexity=complexity,
+        maintainability=maintainability,
+        complexity_source="heuristic-c-v1",
     )

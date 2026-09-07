@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     token_fernet_key: str = ""
     api_base_url: str = "http://localhost:8000"
     web_base_url: str = "http://localhost:3000"
-    analyzer_version: str = "v0.1.0"
+    analyzer_version: str = "v0.2.0"
     github_client_id: str = ""
     github_client_secret: str = ""
     github_webhook_secret: str = ""

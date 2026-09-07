@@ -1,9 +1,11 @@
 """Deterministic finding rules. Every finding has rule_id, severity, evidence.
 
 Rules (V1):
-- high-complexity: Python CC>10 (medium) / >20 (high); TS heuristic >15 (low)
+- high-complexity: Python CC>10 (medium) / >20 (high); TS heuristic >15 (low);
+  C/C++ heuristic >15 (low)
 - god-file: LOC>800 (medium)
-- insecure-pattern: ast hits (medium/high by rule)
+- insecure-pattern: ast hits (medium/high by rule); C heuristic hits
+  (c-gets high, c-missing-free low, other c-* medium)
 - secret-hit: scanner hits (high; private-key → critical)
 - missing-tests: high-risk source file without test counterpart (low)
 - parse-error: file skipped (info, honest partial state)
@@ -29,6 +31,7 @@ GOD_FILE_LOC = 800
 PY_COMPLEX_MED = 10.0
 PY_COMPLEX_HIGH = 20.0
 TS_COMPLEX_FLAG = 15.0
+C_COMPLEX_FLAG = 15.0
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,10 @@ RULE_GUIDANCE: dict[str, RuleGuidance] = {
     "cc-ts-heuristic": RuleGuidance(
         why="Keyword heuristic suggests dense branching (tree-sitter unavailable).",
         fix="Manually review the flagged file; split complex functions.",
+    ),
+    "cc-c-heuristic": RuleGuidance(
+        why="Token heuristic suggests dense branching in C/C++ code.",
+        fix="Split complex functions; prefer early returns and small helpers.",
     ),
     "god-file": RuleGuidance(
         why="Oversized files slow navigation, review, and ownership.",
@@ -77,6 +84,38 @@ RULE_GUIDANCE: dict[str, RuleGuidance] = {
     "py-subprocess-shell": RuleGuidance(
         why="shell=True with variable input allows shell injection.",
         fix="Pass an argument list with shell=False; validate inputs.",
+    ),
+    "c-gets": RuleGuidance(
+        why="gets() performs unbounded input into a fixed buffer — always exploitable.",
+        fix="Replace with fgets() and an explicit buffer size.",
+    ),
+    "c-strcpy": RuleGuidance(
+        why="Unbounded copy can overflow the destination buffer.",
+        fix="Use a bounded copy with an explicit size, or a safe string API.",
+    ),
+    "c-strcat": RuleGuidance(
+        why="Unbounded concatenation can overflow the destination buffer.",
+        fix="Track remaining capacity or use a bounded append.",
+    ),
+    "c-sprintf": RuleGuidance(
+        why="Unbounded formatting can overflow the destination buffer.",
+        fix="Use snprintf() with an explicit size and check its return.",
+    ),
+    "c-system": RuleGuidance(
+        why="Passes commands through a shell, inviting command injection.",
+        fix="Avoid with variable input; prefer exec-family calls with argument lists.",
+    ),
+    "c-popen": RuleGuidance(
+        why="Passes commands through a shell, inviting command injection.",
+        fix="Avoid with variable input; prefer pipes with exec-family calls.",
+    ),
+    "c-scanf-unbounded": RuleGuidance(
+        why="Unbounded %s conversion can overflow the destination buffer.",
+        fix="Add an explicit field width such as %63s for a 64-byte buffer.",
+    ),
+    "c-missing-free": RuleGuidance(
+        why="Heap allocations without a matching free() suggest a leak.",
+        fix="Confirm ownership and lifetime; free every path or use a clear owner.",
     ),
     "secret-aws-access-key": RuleGuidance(
         why="A leaked access key grants account access until rotated.",
@@ -142,20 +181,36 @@ def complexity_findings(path: str, language: str, complexity: float) -> list[Raw
                     0.9,
                 )
             )
-    elif complexity > TS_COMPLEX_FLAG:
-        out.append(
-            RawFinding(
-                "high-complexity",
-                "low",
-                path,
-                None,
-                f"heuristic complexity {complexity:g} exceeds {TS_COMPLEX_FLAG:g} "
-                "(tree-sitter-grade analysis unavailable)",
-                "cc-ts-heuristic",
-                {"complexity": complexity},
-                0.5,
+    elif language in ("javascript", "typescript"):
+        if complexity > TS_COMPLEX_FLAG:
+            out.append(
+                RawFinding(
+                    "high-complexity",
+                    "low",
+                    path,
+                    None,
+                    f"heuristic complexity {complexity:g} exceeds {TS_COMPLEX_FLAG:g} "
+                    "(tree-sitter-grade analysis unavailable)",
+                    "cc-ts-heuristic",
+                    {"complexity": complexity},
+                    0.5,
+                )
             )
-        )
+    elif language in ("c", "cpp"):
+        if complexity > C_COMPLEX_FLAG:
+            out.append(
+                RawFinding(
+                    "high-complexity",
+                    "low",
+                    path,
+                    None,
+                    f"heuristic complexity {complexity:g} exceeds {C_COMPLEX_FLAG:g} "
+                    "(heuristic-c-v1)",
+                    "cc-c-heuristic",
+                    {"complexity": complexity},
+                    0.6,
+                )
+            )
     return out
 
 

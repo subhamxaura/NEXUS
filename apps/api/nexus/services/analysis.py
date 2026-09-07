@@ -44,7 +44,11 @@ async def find_cached(session: AsyncSession, repo_id: int, sha: str) -> Analysis
 def _persist(result: PipelineResult, analysis: Analysis) -> None:
     status = (
         "partial"
-        if (result.skipped or any(f.type == "parse-error" for f in result.findings))
+        if (
+            result.skipped
+            or result.file_count == 0
+            or any(f.type == "parse-error" for f in result.findings)
+        )
         else "complete"
     )
     analysis.status = status
@@ -82,10 +86,15 @@ async def run_analysis(
     try:
         cached = await find_cached(session, repo.id, sha)
         if cached is not None:
-            repo.last_analyzed_sha = sha
-            await session.commit()
-            await session.refresh(cached)
-            return AnalysisOutcome(analysis=cached, cache_hit=True)
+            if cached.metrics.get("file_count", 1) > 0:
+                repo.last_analyzed_sha = sha
+                await session.commit()
+                await session.refresh(cached)
+                return AnalysisOutcome(analysis=cached, cache_hit=True)
+            # Zero-file shell: drop it so a corrected analyzer result is
+            # recomputed and persisted instead of masked (unique key).
+            await session.delete(cached)
+            await session.flush()
 
         analysis = Analysis(
             repo_id=repo.id,

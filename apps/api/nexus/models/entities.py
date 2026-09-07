@@ -44,7 +44,7 @@ class Analysis(Base):
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     health_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    analyzer_version: Mapped[str] = mapped_column(String(32), default="v0.1.0")
+    analyzer_version: Mapped[str] = mapped_column(String(32), default="v0.2.0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

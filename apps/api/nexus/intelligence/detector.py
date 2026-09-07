@@ -1,4 +1,4 @@
-"""Language detection for V1 (Python + JS/TS). Go/Java interfaces stubbed for later."""
+"""Language detection for V1 (Python + JS/TS + C/C++). Go/Java stubbed for later."""
 
 SUPPORTED_EXTENSIONS: dict[str, str] = {
     ".py": "python",
@@ -6,6 +6,14 @@ SUPPORTED_EXTENSIONS: dict[str, str] = {
     ".jsx": "javascript",
     ".ts": "typescript",
     ".tsx": "typescript",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".hpp": "cpp",
+    ".hh": "cpp",
+    ".hxx": "cpp",
 }
 
 SKIP_DIRS = frozenset(

@@ -97,9 +97,13 @@ def health_score(
     file_count: int,
     partial: bool,
 ) -> HealthScore:
-    """Penalty-based 0-100 score. Empty repos score 100 (nothing to fault)."""
+    """Penalty-based 0-100 score.
+
+    Zero analyzed files is not a healthy project: score 0 with an explicit
+    penalty contributor instead of a misleading 100.
+    """
     if file_count == 0:
-        return HealthScore(score=100.0, breakdown={}, partial=partial)
+        return HealthScore(score=0.0, breakdown={"no_supported_files": 100.0}, partial=True)
     complexity_pen = min(30.0, avg_complexity * 2.0)
     security_pen = min(35.0, security_count * 7.0)
     testing_pen = round(20.0 * _clamp01(untested_ratio), 2)

@@ -1,6 +1,14 @@
 # NEXUS Progress
 
 ## Status: VERIFICATION PHASE — COMPLETE. MVP fully built; deploy + live keys remain with user.
+
+## C/C++ support fix (targeted, no other behavior changed)
+- Added deterministic C/C++ intelligence: detector mappings (`.c/.h`→c, `.cpp/.cc/.cxx/.hpp/.hh/.hxx`→cpp), new `intelligence/c_parser.py` (comment/string-masked heuristic parser, `#include` resolution, conservative `c-*` security rules, MI proxy documented as heuristic), `c_numbers()` (`heuristic-c-v1`), C branch in `complexity_findings()` (`cc-c-heuristic`), guidance entries. Python/JS/TS paths byte-identical in behavior.
+- Zero-file honesty: empty analyses persist as `partial` with health `0.0` (`no_supported_files: 100`); `find_cached` lookup unchanged for display, but `run_analysis` never returns a zero-file row as a cache hit (drops the shell and recomputes, no unique-key violation).
+- Analyzer version `v0.1.0` → `v0.2.0`: stale pre-fix empty rows (e.g. CityRoute SHA `1f59af0…`) can no longer match; legacy rows left untouched in the DB.
+- Real validation on `subhamxaura/CityRoute-Navigator` @ `1f59af0d…`: 18 C files, health 50.0, 14 findings (8 complexity + 6 missing-tests), 25 include edges, rerun cache-hit with identical ID.
+- Verified: 93 backend tests pass, coverage 88% (≥80 gate held), ruff/format/mypy clean, no frontend changes.
+- NOTE (pre-existing, not mine): working tree contains an unrelated `CORSMiddleware` addition in `apps/api/nexus/main.py`; left uncommitted and untouched.
 - Real-network E2E (2026-09-06): cloned and analyzed **psf/requests** through the real API — 37 files, health 13.8 with reconciling breakdown, 32 plausible findings, 10 graph edges, same-SHA rerun cache-hit with identical ID. Phase 1 gate verified against a real repository not just fixtures.
 - Coverage: **88% total, `--cov-fail-under=80` enforced in CI**; every safety-critical module ≥80% except host-only lines (live-LLM adapters need a key, Docker execution needs a daemon, one worker success line needs a full mission run) — all documented. Added `[tool.coverage]` with `concurrency = ["greenlet", "thread"]`.
 - Debugging note for the record: coverage initially read 28–31% on heavily exercised service code. Root cause was **SQLAlchemy async greenlet switches at every DB await** combined with default thread-only tracing — not missing tests. Fixed via config, not by writing redundant tests. Evidence-first debugging held: direct-call probes and per-line execution maps isolated it.

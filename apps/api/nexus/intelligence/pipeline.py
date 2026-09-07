@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from nexus.intelligence import graph as dep_graph
+from nexus.intelligence.c_parser import parse_c, resolve_c_include
 from nexus.intelligence.churn import batch_churn
 from nexus.intelligence.detector import SKIP_DIRS, detect_language
 from nexus.intelligence.findings import (
@@ -14,7 +15,7 @@ from nexus.intelligence.findings import (
     god_file_finding,
     missing_tests_finding,
 )
-from nexus.intelligence.metrics import python_numbers, ts_numbers
+from nexus.intelligence.metrics import c_numbers, python_numbers, ts_numbers
 from nexus.intelligence.python_parser import parse_python
 from nexus.intelligence.scoring import file_risk, finding_priority, health_score
 from nexus.intelligence.secrets_scanner import SecretHit, scan_text
@@ -22,6 +23,9 @@ from nexus.intelligence.ts_parser import resolve_relative_import
 
 MAX_FILES = 2000
 MAX_FILE_BYTES = 1_000_000
+
+_HIGH_INSECURE_RULES = frozenset({"py-eval-exec", "py-pickle", "c-gets"})
+_LOW_INSECURE_RULES = frozenset({"c-missing-free"})
 
 
 @dataclass(frozen=True)
@@ -88,6 +92,7 @@ def _is_test_path(path: str) -> bool:
         or stem.endswith(".test.js")
         or stem.endswith(".spec.ts")
         or stem.endswith(".spec.js")
+        or stem.endswith("_test")
         or lowered.startswith(("tests/", "test/"))
         or "/tests/" in lowered
         or "/test/" in lowered
@@ -167,6 +172,16 @@ def run_pipeline(repo_dir: Path) -> PipelineResult:
                 for h in py_facts.insecure
             ]
             nums = python_numbers(text)
+        elif lang in ("c", "cpp"):
+            c_facts = parse_c(text)
+            if c_facts.parse_error:
+                parse_errors[rel] = c_facts.parse_error
+            imports[rel] = list(c_facts.includes)
+            insecure[rel] = [
+                {"line": h.line, "rule_id": h.rule_id, "message": h.message}
+                for h in c_facts.insecure
+            ]
+            nums = c_numbers(text, len(c_facts.functions))
         else:
             from nexus.intelligence.ts_parser import parse_ts
 
@@ -183,10 +198,15 @@ def run_pipeline(repo_dir: Path) -> PipelineResult:
         for spec in sorted(set(imports[rel])):
             if lang == "python":
                 dst = _resolve_python_import(spec, rel, file_set)
+                kind = "import"
+            elif lang in ("c", "cpp"):
+                dst = resolve_c_include(rel, spec, file_set)
+                kind = "include"
             else:
                 dst = resolve_relative_import(rel, spec, file_set)
+                kind = "import"
             if dst and dst != rel:
-                edge_list.append((rel, dst, "import"))
+                edge_list.append((rel, dst, kind))
 
     graph = dep_graph.build_graph(sorted(sources), [(s, d) for s, d, _ in edge_list])
     deg = dep_graph.degrees(graph)
@@ -236,7 +256,12 @@ def run_pipeline(repo_dir: Path) -> PipelineResult:
             if god:
                 raw.append(god)
         for hit in insecure[rel]:
-            sev = "high" if hit["rule_id"] in ("py-eval-exec", "py-pickle") else "medium"
+            if hit["rule_id"] in _HIGH_INSECURE_RULES:
+                sev = "high"
+            elif hit["rule_id"] in _LOW_INSECURE_RULES:
+                sev = "low"
+            else:
+                sev = "medium"
             raw.append(
                 RawFinding(
                     "insecure-pattern",
@@ -307,12 +332,15 @@ def run_pipeline(repo_dir: Path) -> PipelineResult:
     untested = sum(1 for fr in src_files if fr.test_presence < 1.0) / max(1, len(src_files))
     hotspots = sum(1 for fr in file_results if fr.risk >= 0.5) / max(1, len(file_results))
     avg_cc = sum(fr.complexity for fr in file_results) / max(1, len(file_results))
-    partial = bool(skipped) or bool(parse_errors)
+    # Zero analyzed files is not a healthy project: mark partial so the
+    # service layer persists a partial status and the health score stays 0.
+    partial = bool(skipped) or bool(parse_errors) or len(file_results) == 0
     health = health_score(avg_cc, sec_count, untested, hotspots, len(file_results), partial)
 
     availability = {
         "radon": "available",
         "tree-sitter": "deferred (TS heuristic in use)",
+        "c-cpp": "available (heuristic-c-v1)",
         "bandit": "unavailable (builtin pattern rules in use)",
         "semgrep": "unavailable (builtin pattern rules in use)",
         "dependency-audit": "unavailable (Phase 1)",
