@@ -188,15 +188,25 @@ def parse_c(source: str) -> CFacts:
         for pattern, rule_id, message in _CALL_RULES:
             if pattern.search(code):
                 insecure.append(InsecureHit(lineno, rule_id, message))
-        scanf = _SCANF_RE.search(raw)
-        if scanf and _UNBOUNDED_S_RE.search(scanf.group(2)):
-            insecure.append(
-                InsecureHit(
-                    lineno,
-                    "c-scanf-unbounded",
-                    f"{scanf.group(1)}() with unbounded %s; add an explicit field width",
+        # The format string only exists in the raw text, so scan raw lines —
+        # but each hit's call-site keyword must also appear verbatim at the
+        # same offset in the masked line: the masker blanks comments and
+        # string contents, so a surviving keyword proves the call site is
+        # executable code, not a commented-out line or a string mentioning
+        # scanf. Checking every match also fixes the same-line blind spot
+        # where a bounded scanf hid an unbounded one from .search().
+        for scanf in _SCANF_RE.finditer(raw):
+            keyword = scanf.group(1)
+            if code[scanf.start() : scanf.start() + len(keyword)] != keyword:
+                continue
+            if _UNBOUNDED_S_RE.search(scanf.group(2)):
+                insecure.append(
+                    InsecureHit(
+                        lineno,
+                        "c-scanf-unbounded",
+                        f"{scanf.group(1)}() with unbounded %s; add an explicit field width",
+                    )
                 )
-            )
         if _ALLOC_RE.search(code):
             alloc_count += 1
             if alloc_first_line is None:

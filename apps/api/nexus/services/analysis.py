@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nexus.core.config import settings
@@ -62,6 +63,35 @@ def _persist(result: PipelineResult, analysis: Analysis) -> None:
     }
 
 
+def _is_fresh(row: Analysis) -> bool:
+    """A row usable as a cache hit: terminal status plus a real file count.
+
+    Legacy rows without a ``file_count`` metric are treated as containing no
+    files and are recomputed — never masked as valid hits.
+    """
+    return row.status in ("complete", "partial") and row.metrics.get("file_count", 0) > 0
+
+
+async def _locked_row_for_key(session: AsyncSession, repo_id: int, sha: str) -> Analysis | None:
+    """Any Analysis row for the cache key, row-locked where the DB supports it.
+
+    FOR UPDATE serializes two workers resuming the same stale row on
+    PostgreSQL; SQLite (dev/tests) ignores the lock harmlessly.
+    """
+    stmt = (
+        select(Analysis)
+        .where(
+            Analysis.repo_id == repo_id,
+            Analysis.commit_sha == sha,
+            Analysis.analyzer_version == settings.analyzer_version,
+        )
+        .order_by(Analysis.id.desc())
+        .with_for_update()
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
 async def _clear_children(session: AsyncSession, analysis_id: int) -> None:
     for model in (Finding, DependencyEdge, FileMetric):
         await session.execute(delete(model).where(model.analysis_id == analysis_id))
@@ -85,24 +115,51 @@ async def run_analysis(
 
     try:
         cached = await find_cached(session, repo.id, sha)
-        if cached is not None:
-            if cached.metrics.get("file_count", 1) > 0:
-                repo.last_analyzed_sha = sha
-                await session.commit()
-                await session.refresh(cached)
-                return AnalysisOutcome(analysis=cached, cache_hit=True)
-            # Zero-file shell: drop it so a corrected analyzer result is
-            # recomputed and persisted instead of masked (unique key).
-            await session.delete(cached)
-            await session.flush()
+        if cached is not None and _is_fresh(cached):
+            repo.last_analyzed_sha = sha
+            await session.commit()
+            await session.refresh(cached)
+            return AnalysisOutcome(analysis=cached, cache_hit=True)
 
-        analysis = Analysis(
-            repo_id=repo.id,
-            commit_sha=sha,
-            status="running",
-            analyzer_version=settings.analyzer_version,
-        )
-        session.add(analysis)
+        # Cache miss. Reuse ANY existing row for the unique key — stale
+        # pending/running/failed rows (crashed worker, earlier pipeline
+        # failure) and zero-file shells are reset and recomputed in place
+        # instead of poisoning the SHA with an IntegrityError on duplicate
+        # insert. Fresh complete/partial rows with files were already
+        # returned above, so whatever is found here must be recomputed.
+        repo_id = repo.id
+        analysis = await _locked_row_for_key(session, repo_id, sha)
+        if analysis is None:
+            analysis = Analysis(
+                repo_id=repo_id,
+                commit_sha=sha,
+                status="running",
+                analyzer_version=settings.analyzer_version,
+            )
+            session.add(analysis)
+            try:
+                await session.flush()
+            except IntegrityError:
+                # A concurrent producer created the same key first (unique
+                # constraint). Adopt its row — never create duplicates.
+                # Rollback expires `repo`, so re-fetch it before touching it.
+                await session.rollback()
+                analysis = await _locked_row_for_key(session, repo_id, sha)
+                if analysis is None:
+                    raise
+                refetched = await session.get(Repository, repo_id)
+                if refetched is None:  # pragma: no cover -- repo vanished mid-flight
+                    raise RuntimeError(f"repository {repo_id} disappeared mid-analysis") from None
+                repo = refetched
+                if _is_fresh(analysis):
+                    repo.last_analyzed_sha = sha
+                    await session.commit()
+                    await session.refresh(analysis)
+                    return AnalysisOutcome(analysis=analysis, cache_hit=True)
+        # Recompute in place; clear state from the previous attempt.
+        analysis.status = "running"
+        analysis.metrics = {}
+        analysis.health_score = None
         await session.flush()
 
         try:

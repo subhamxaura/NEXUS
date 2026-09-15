@@ -266,7 +266,7 @@ function RepoInner({ id }: { id: number }) {
               ) : (
                 <>
                   <p className="text-xs text-zinc-500">
-                    {graph.data.nodes.length} files · {graph.data.edges.length} import edges.
+                    {graph.data.nodes.length} files · {graph.data.edges.length} dependency edges.
                   </p>
                   <div className="mt-3">
                     <DepGraph

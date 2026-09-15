@@ -1,6 +1,7 @@
+import subprocess
 from pathlib import Path
 
-from nexus.intelligence.churn import batch_churn
+from nexus.intelligence.churn import batch_churn, file_churn
 from nexus.intelligence.metrics import python_numbers, ts_numbers
 from nexus.intelligence.pipeline import run_pipeline
 from nexus.intelligence.python_parser import parse_python
@@ -56,6 +57,64 @@ def test_ts_complexity_source_labeled() -> None:
 
 def test_churn_zero_without_history(tmp_path: Path) -> None:
     assert batch_churn(tmp_path, ["nope.py"]) == {"nope.py": 0}
+
+
+def _git(*args: str, cwd: Path) -> None:
+    subprocess.run(  # noqa: S603 -- fixed git binary, test fixture only
+        ["git", *args],  # noqa: S607 -- fixed git binary, test fixture only
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def test_batch_churn_matches_per_file_on_real_history(tmp_path: Path) -> None:
+    """Batched churn must equal the per-file reference on the same history."""
+    _git("init", "-q", cwd=tmp_path)
+    _git("config", "user.email", "t@example.com", cwd=tmp_path)
+    _git("config", "user.name", "t", cwd=tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / "b.py").write_text("y = 1\n")
+    (tmp_path / "c.py").write_text("z = 1\n")
+    _git("add", ".", cwd=tmp_path)
+    _git("commit", "-q", "-m", "c1", cwd=tmp_path)
+    (tmp_path / "a.py").write_text("x = 2\n")
+    _git("add", ".", cwd=tmp_path)
+    _git("commit", "-q", "-m", "c2", cwd=tmp_path)
+    (tmp_path / "b.py").write_text("y = 2\n")
+    (tmp_path / "b.py").write_text("y = 3\n")
+    _git("add", ".", cwd=tmp_path)
+    _git("commit", "-q", "-m", "c3", cwd=tmp_path)
+
+    paths = ["a.py", "b.py", "c.py"]
+    expected = {p: file_churn(tmp_path, p) for p in paths}
+    assert expected == {"a.py": 2, "b.py": 2, "c.py": 1}
+    assert batch_churn(tmp_path, paths) == expected
+
+    # Batching edge: more than one _BATCH_SIZE batch stays equivalent.
+    assert batch_churn(tmp_path, paths * 250) == {p: expected[p] for _ in range(250) for p in paths}
+
+
+def test_batch_churn_skips_merge_and_rename_noise(tmp_path: Path) -> None:
+    """Renames must not credit the old path (pre-fix semantics preserved)."""
+    _git("init", "-q", cwd=tmp_path)
+    _git("config", "user.email", "t@example.com", cwd=tmp_path)
+    _git("config", "user.name", "t", cwd=tmp_path)
+    (tmp_path / "old.py").write_text("x = 1\n")
+    _git("add", ".", cwd=tmp_path)
+    _git("commit", "-q", "-m", "c1", cwd=tmp_path)
+    (tmp_path / "old.py").rename(tmp_path / "new.py")
+    _git("add", ".", cwd=tmp_path)
+    _git("commit", "-q", "-m", "c2", cwd=tmp_path)
+
+    counts = batch_churn(tmp_path, ["old.py", "new.py"])
+    # Exactly the per-file reference (pre-fix --no-renames semantics: the
+    # delete of old.py counts, the rename is never credited as a copy).
+    assert counts == {p: file_churn(tmp_path, p) for p in ("old.py", "new.py")}
+    assert counts["new.py"] == 1
+    assert counts["old.py"] == 2
 
 
 def test_file_risk_bounded() -> None:

@@ -14,6 +14,7 @@ from nexus.intelligence.findings import complexity_findings, guidance_for
 from nexus.intelligence.metrics import c_numbers
 from nexus.intelligence.pipeline import run_pipeline
 from nexus.intelligence.scoring import health_score
+from nexus.models.entities import Analysis
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_c_repo"
 
@@ -82,6 +83,28 @@ def test_c_include_resolution() -> None:
     assert resolve_c_include("graph.h", "graph.h", files) is None  # self
 
 
+def test_scanf_comment_and_string_safety() -> None:
+    """H1: comments/strings never fire the scanf rule; executable calls do."""
+    code = (
+        '// scanf("%s", buf);\n'  # line 1: line comment
+        '/* scanf("%s", buf); */\n'  # line 2: block comment
+        'char *msg = "scanf("%s", x)";\n'  # line 3: string literal
+        "int f(void) {\n"
+        '  scanf("%s", buf);\n'  # line 5: real unbounded -> HIT
+        '  scanf("%64s", buf);\n'  # line 6: real bounded -> no hit
+        '  // mixed: scanf("%s", b);\n'  # line 7: comment after real code
+        '  scanf("%10s", b); scanf("%s", c);\n'  # line 8: bounded + unbounded -> ONE hit
+        '  const char *hint = "use scanf("%s") carefully";\n'  # line 9: string
+        "  return 0;\n"
+        "}\n"
+    )
+    hits = parse_c(code).insecure
+    assert [(h.line, h.rule_id) for h in hits] == [
+        (5, "c-scanf-unbounded"),
+        (8, "c-scanf-unbounded"),
+    ]
+
+
 def test_c_security_patterns() -> None:
     text = (FIXTURE / "main.c").read_text()
     hits = {h.rule_id: h for h in parse_c(text).insecure}
@@ -148,6 +171,267 @@ def test_empty_health_score_direct() -> None:
     score = health_score(0.0, 0, 0.0, 0.0, 0, False)
     assert score.score == 0.0
     assert score.partial is True
+
+
+def test_c_test_prefix_stems(tmp_path: Path) -> None:
+    """L6: test_graph.c must count as the test counterpart of graph.c."""
+    (tmp_path / "graph.c").write_text("int graph_add(int a, int b) { return a + b; }\n")
+    (tmp_path / "test_graph.c").write_text(
+        '#include "graph.h"\nint main(void) { if (graph_add(1, 2) != 3) return 1; return 0; }\n'
+    )
+    res = run_pipeline(tmp_path)
+    files = {f.path: f for f in res.files}
+    assert files["graph.c"].test_presence == 1.0
+    assert not any(f.type == "missing-tests" and f.path == "graph.c" for f in res.findings)
+
+
+@pytest.mark.usefixtures("_fresh_db")
+@pytest.mark.parametrize("stale_status", ["pending", "running", "failed"])
+async def test_stale_row_is_reused_not_duplicated(stale_status: str) -> None:
+    """C1: pending/running/failed rows are reset and recomputed in place."""
+    from sqlalchemy import func, select
+
+    from nexus.core.config import settings
+    from nexus.core.database import SessionLocal
+    from nexus.models.entities import Analysis, Repository
+    from nexus.services.analysis import run_analysis
+
+    async with SessionLocal() as session:
+        session.add(Repository(owner="o", name="r", owner_user_id=None))
+        await session.flush()
+        repo = (await session.execute(select(Repository))).scalars().first()
+        assert repo is not None
+        session.add(
+            Analysis(
+                repo_id=repo.id,
+                commit_sha="test-sha",
+                status=stale_status,
+                analyzer_version=settings.analyzer_version,
+                metrics={"junk": True},
+            )
+        )
+        await session.commit()
+        stale_id = (await session.execute(select(Analysis.id))).scalars().first()
+        assert stale_id is not None
+
+        outcome = await run_analysis(session, repo, source_dir=FIXTURE)
+
+        assert outcome.cache_hit is False
+        assert outcome.analysis.id == stale_id  # reused, not duplicated
+        assert outcome.analysis.status == "complete"
+        assert outcome.analysis.metrics["file_count"] == 5
+        assert "junk" not in outcome.analysis.metrics  # previous state cleared
+        total = (await session.execute(select(func.count()).select_from(Analysis))).scalar_one()
+        assert total == 1
+
+
+@pytest.mark.usefixtures("_fresh_db")
+async def test_failed_analysis_is_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """C1: a failed analysis must not poison the SHA for later retries."""
+    from sqlalchemy import func, select
+
+    import nexus.services.analysis as analysis_svc
+    from nexus.core.database import SessionLocal
+    from nexus.models.entities import Repository
+    from nexus.services.analysis import run_analysis
+
+    def _boom(workspace: object) -> object:
+        raise RuntimeError("parser exploded")
+
+    real_pipeline = analysis_svc.run_pipeline
+    async with SessionLocal() as session:
+        session.add(Repository(owner="o", name="r", owner_user_id=None))
+        await session.flush()
+        repo = (await session.execute(select(Repository))).scalars().first()
+        assert repo is not None
+        await session.commit()
+
+        monkeypatch.setattr(analysis_svc, "run_pipeline", _boom)
+        first = await run_analysis(session, repo, source_dir=FIXTURE)
+        assert first.cache_hit is False
+        assert first.analysis.status == "failed"
+        assert "RuntimeError" in str(first.analysis.metrics.get("error", ""))
+
+        monkeypatch.setattr(analysis_svc, "run_pipeline", real_pipeline)
+        second = await run_analysis(session, repo, source_dir=FIXTURE)
+        assert second.cache_hit is False
+        assert second.analysis.id == first.analysis.id
+        assert second.analysis.status == "complete"
+        assert second.analysis.metrics["file_count"] == 5
+        assert (await session.execute(select(func.count()).select_from(Analysis))).scalar_one() == 1
+
+
+@pytest.mark.usefixtures("_fresh_db")
+async def test_legacy_row_without_file_count_recomputes() -> None:
+    """M4: a complete/partial row lacking file_count must never cache-hit."""
+    from sqlalchemy import func, select
+
+    from nexus.core.config import settings
+    from nexus.core.database import SessionLocal
+    from nexus.models.entities import Analysis, Repository
+    from nexus.services.analysis import run_analysis
+
+    async with SessionLocal() as session:
+        session.add(Repository(owner="o", name="r", owner_user_id=None))
+        await session.flush()
+        repo = (await session.execute(select(Repository))).scalars().first()
+        assert repo is not None
+        session.add(
+            Analysis(
+                repo_id=repo.id,
+                commit_sha="test-sha",
+                status="complete",
+                health_score=99.0,
+                metrics={"finding_count": 3},  # no file_count: unknown, not "has files"
+                analyzer_version=settings.analyzer_version,
+            )
+        )
+        await session.commit()
+        legacy_id = (await session.execute(select(Analysis.id))).scalars().first()
+        assert legacy_id is not None
+
+        outcome = await run_analysis(session, repo, source_dir=FIXTURE)
+
+        assert outcome.cache_hit is False
+        assert outcome.analysis.id == legacy_id  # recomputed in place
+        assert outcome.analysis.metrics["file_count"] == 5
+        assert (await session.execute(select(func.count()).select_from(Analysis))).scalar_one() == 1
+
+
+@pytest.mark.usefixtures("_fresh_db")
+@pytest.mark.parametrize("stale_status", ["complete", "partial"])
+async def test_valid_rows_with_files_still_cache_hit(stale_status: str) -> None:
+    """C1 scope guard: fresh complete/partial rows with files are untouched."""
+    from sqlalchemy import func, select
+
+    from nexus.core.config import settings
+    from nexus.core.database import SessionLocal
+    from nexus.models.entities import Analysis, Repository
+    from nexus.services.analysis import run_analysis
+
+    async with SessionLocal() as session:
+        session.add(Repository(owner="o", name="r", owner_user_id=None))
+        await session.flush()
+        repo = (await session.execute(select(Repository))).scalars().first()
+        assert repo is not None
+        session.add(
+            Analysis(
+                repo_id=repo.id,
+                commit_sha="test-sha",
+                status=stale_status,
+                health_score=42.0,
+                metrics={"file_count": 5, "finding_count": 7},
+                analyzer_version=settings.analyzer_version,
+            )
+        )
+        await session.commit()
+        row_id = (await session.execute(select(Analysis.id))).scalars().first()
+        assert row_id is not None
+
+        outcome = await run_analysis(session, repo, source_dir=FIXTURE)
+
+        assert outcome.cache_hit is True
+        assert outcome.analysis.id == row_id
+        assert outcome.analysis.metrics["finding_count"] == 7  # not recomputed
+        assert (await session.execute(select(func.count()).select_from(Analysis))).scalar_one() == 1
+
+
+@pytest.mark.usefixtures("_fresh_db")
+async def test_concurrent_duplicate_insert_adopts_existing_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1: losing an insert race adopts the winner's row instead of crashing."""
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    import nexus.services.analysis as analysis_svc
+    from nexus.core.config import settings
+    from nexus.core.database import SessionLocal
+    from nexus.models.entities import Repository
+    from nexus.services.analysis import run_analysis
+
+    async with SessionLocal() as session:
+        session.add(Repository(owner="o", name="r", owner_user_id=None))
+        await session.flush()
+        repo = (await session.execute(select(Repository))).scalars().first()
+        assert repo is not None
+        session.add(
+            Analysis(
+                repo_id=repo.id,
+                commit_sha="test-sha",
+                status="pending",
+                analyzer_version=settings.analyzer_version,
+            )
+        )
+        await session.commit()
+
+        real_lookup = analysis_svc._locked_row_for_key
+        calls = {"n": 0}
+
+        async def _hide_first(session: AsyncSession, repo_id: int, sha: str) -> Analysis | None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None  # simulate a rival creating the row after our check
+            return await real_lookup(session, repo_id, sha)
+
+        monkeypatch.setattr(analysis_svc, "_locked_row_for_key", _hide_first)
+        outcome = await run_analysis(session, repo, source_dir=FIXTURE)
+
+        assert calls["n"] >= 2  # insert raced, rolled back, adopted
+        assert outcome.cache_hit is False
+        assert outcome.analysis.status == "complete"
+        assert outcome.analysis.metrics["file_count"] == 5
+        assert (await session.execute(select(func.count()).select_from(Analysis))).scalar_one() == 1
+
+
+@pytest.mark.usefixtures("_fresh_db")
+async def test_concurrent_fresh_row_wins_returns_cache_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C1: if the rival already finished a fresh analysis, serve it as a hit."""
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    import nexus.services.analysis as analysis_svc
+    from nexus.core.config import settings
+    from nexus.core.database import SessionLocal
+    from nexus.models.entities import Repository
+    from nexus.services.analysis import run_analysis
+
+    async with SessionLocal() as session:
+        session.add(Repository(owner="o", name="r", owner_user_id=None))
+        await session.flush()
+        repo = (await session.execute(select(Repository))).scalars().first()
+        assert repo is not None
+        session.add(
+            Analysis(
+                repo_id=repo.id,
+                commit_sha="test-sha",
+                status="complete",
+                health_score=77.0,
+                metrics={"file_count": 5, "finding_count": 14},
+                analyzer_version=settings.analyzer_version,
+            )
+        )
+        await session.commit()
+        row_id = (await session.execute(select(Analysis.id))).scalars().first()
+        assert row_id is not None
+
+        real_lookup = analysis_svc._locked_row_for_key
+        calls = {"n": 0}
+
+        async def _hide_first(session: AsyncSession, repo_id: int, sha: str) -> Analysis | None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return None
+            return await real_lookup(session, repo_id, sha)
+
+        monkeypatch.setattr(analysis_svc, "_locked_row_for_key", _hide_first)
+        outcome = await run_analysis(session, repo, source_dir=FIXTURE)
+
+        assert outcome.cache_hit is True
+        assert outcome.analysis.id == row_id
+        assert (await session.execute(select(func.count()).select_from(Analysis))).scalar_one() == 1
 
 
 @pytest.mark.usefixtures("_fresh_db")

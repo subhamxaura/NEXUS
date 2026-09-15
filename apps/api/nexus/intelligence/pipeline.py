@@ -214,9 +214,17 @@ def run_pipeline(repo_dir: Path) -> PipelineResult:
 
     churn_map = batch_churn(repo_dir, sorted(sources))
     test_stems = frozenset(
-        p.rsplit("/", 1)[-1].rsplit(".", 1)[0].removesuffix("_test").removesuffix(".test")
+        stem
         for p in sources
         if _is_test_path(p)
+        and (
+            stem := p.rsplit("/", 1)[-1]
+            .rsplit(".", 1)[0]
+            .removesuffix("_test")
+            .removesuffix(".test")
+            .removeprefix("test_")
+            .removeprefix("tests_")
+        )
     )
 
     file_results: list[FileResult] = []
