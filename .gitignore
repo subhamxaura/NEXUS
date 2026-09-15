@@ -16,3 +16,4 @@ dist/
 .coverage
 coverage.xml
 htmlcov/
+.freebuff/
