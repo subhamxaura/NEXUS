@@ -42,5 +42,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose config
-      - run: docker compose up -d db redis && sleep 10 && docker compose down -v
+
+      - name: Create CI environment
+        run: cp .env.example .env
+
+      - name: Validate Compose
+        run: docker compose config
+
+      - name: Test infrastructure
+        run: docker compose up -d db redis && sleep 10 && docker compose down -v
+
+      - name: Cleanup CI environment
+        if: always()
+        run: rm -f .env
